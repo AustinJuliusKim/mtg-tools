@@ -47,6 +47,7 @@ Doubling Season (foil)  FDN    mythic    x4   $36.04  $144.16  Binders2
 | `ledger` | The tracking ledger with tax and insurance columns |
 | `dashboard` | Build the self-contained HTML triage GUI |
 | `validate` | Flag rows that need a human look |
+| `sealed …` | Sealed commander deck tracker (see below) |
 
 Add `--markdown` to `summary`, `tiers`, `dupes` or `top` to get a pipe table
 that pastes straight into the vault.
@@ -93,6 +94,72 @@ Two notes on how the money works:
   bands. A test pins the equivalence.
 
 The generated file embeds the whole inventory, so it's gitignored.
+
+## Sealed commander decks
+
+Singles come from ManaBox. Sealed decks have no scanner and no buylist, so they
+get their own tracker with hand-entered prices.
+
+```bash
+python3 -m binders sealed template -o sealed.csv   # start a list
+python3 -m binders sealed doctor   sealed.csv      # fix what didn't resolve
+python3 -m binders sealed summary  sealed.csv
+python3 -m binders sealed ledger   sealed.csv -o sealed_ledger.csv
+python3 -m binders sealed snapshot sealed.csv      # then diff two snapshots later
+```
+
+`sealed.csv` needs only a name and a quantity to start:
+
+```
+Name,Set,Quantity,Condition,Price,Price date,Source,Cost basis,Notes
+Sneak Attack,,1,sealed,42.00,2026-07-27,tcgplayer,35.00,
+Heavenly Inferno,CMD,1,sealed,240.00,2026-07-27,ebay,,the 2011 original
+```
+
+### Why prices are entered by hand
+
+Not a shortcut — there is no good automated option:
+
+| Source | Sealed prices | Access |
+|---|---|---|
+| TCGplayer API | yes | closed to new developers since late 2024 |
+| eBay sold comps (Marketplace Insights) | yes | approved partners only |
+| eBay Browse API | active listings | free, but **asking** prices, not realized |
+| MTGJSON | **none** | free ([open request since 2022](https://github.com/mtgjson/mtgjson/issues/928)) |
+| PriceCharting | yes | paid subscription |
+| Scraping TCGplayer / CK / Amazon | yes | ToS problems, Cloudflare, brittle |
+
+No free source publishes realized sale prices. Sealed product also moves slowly,
+so a quarterly pass over a few dozen decks is tractable in a way it never would
+be for 543 singles. Every price carries **its own date and source**, because an
+undated valuation is not insurance documentation.
+
+### What the tool does contribute
+
+Product identity, which is the part a person gets wrong. MTGJSON's `SetList.json`
+carries sealed product data, so `binders/data/commander_decks.json` vendors all
+**220 commander decks** ever printed with their MTGJSON UUID and nine vendor
+product IDs (TCGplayer, Card Kingdom, Cardmarket, CardTrader and others). That
+file is committed, which is why the package stays offline — `sealed
+refresh-catalog` is the only command that touches the network.
+
+Resolution reports what it can't pin rather than guessing:
+
+- **212 of 220 nicknames are unique**, so a bare `Sneak Attack` resolves.
+- **8 collide** — Heavenly Inferno, Devour for Power, Evasive Maneuvers and five
+  others exist in both an original Commander set and a later Anthology. These
+  come back **ambiguous with both candidates listed**, because the printings can
+  differ several-fold in price and picking one would silently misvalue a deck.
+  Add a set code to pin it.
+- **16 Collector's Edition variants** never collapse into their base deck, and
+  resolving a base deck notes that the pricier variant exists.
+- **25 products keep a set prefix in their nickname** (the set is "Warhammer
+  40,000" but the product says "Warhammer 40000"), handled by a suffix-match
+  tier so `Forces of the Imperium` still resolves — and still doesn't match the
+  Collector's Edition.
+
+Unpriced rows are never counted as `$0.00`: `summary` reports the total as a
+floor and says how many decks are missing a price.
 
 ## Library
 

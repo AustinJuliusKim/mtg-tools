@@ -16,3 +16,9 @@ __pycache__/
 /sell-list.csv
 /dashboard.html
 /*.html
+
+# Your actual sealed inventory and its dated snapshots. The catalog under
+# binders/data/ IS tracked — that's reference data, not holdings.
+/sealed.csv
+/sealed_ledger.csv
+/snapshots/

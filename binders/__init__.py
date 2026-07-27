@@ -31,6 +31,7 @@ from .aggregate import (
     summarize,
     top_n,
 )
+from .catalog import Catalog, Deck, load_catalog
 from .dashboard import build_dashboard, build_payload, render_html
 from .diff import Change, Diff, diff
 from .export import (
@@ -44,6 +45,14 @@ from .export import (
 )
 from .filters import all_of, any_of, negate, where
 from .io import Issue, load, load_many, save, validate
+from .sealed import (
+    SealedHolding,
+    diff_sealed,
+    load_sealed,
+    resolve,
+    save_sealed,
+    summarize_sealed,
+)
 from .model import Card, Collection, Tier, money, normalize_title
 
 __version__ = "0.1.0"
@@ -86,6 +95,16 @@ __all__ = [
     "build_dashboard",
     "build_payload",
     "render_html",
+    # sealed
+    "Catalog",
+    "Deck",
+    "load_catalog",
+    "SealedHolding",
+    "load_sealed",
+    "save_sealed",
+    "resolve",
+    "summarize_sealed",
+    "diff_sealed",
     # export
     "to_manabox_csv",
     "to_buylist_csv",

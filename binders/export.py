@@ -17,6 +17,7 @@ __all__ = [
     "to_manabox_csv",
     "to_buylist_csv",
     "to_ledger_csv",
+    "to_sealed_ledger_csv",
     "to_markdown",
     "tier_table",
     "multi_copy_table",
@@ -178,6 +179,63 @@ def to_ledger_csv(
 
 
 # --- markdown ---------------------------------------------------------------
+
+
+def to_sealed_ledger_csv(
+    holdings: Iterable,
+    path,
+    *,
+    valuation_date: Optional[date] = None,
+    insurance_threshold=Decimal("50"),
+) -> list:
+    """Write sealed holdings into the same ledger schema as the singles.
+
+    Same columns as `to_ledger_csv` so both piles land in one
+    `mtg_collection_tracker.csv`. Differences that matter:
+
+    - `Valuation Date` comes from each row's own `Price date` where present,
+      because a hand-entered sealed price was looked up on a specific day and
+      claiming today's date for it would be false.
+    - `Cost Basis` is carried through when the row has one, rather than always
+      blank — sealed decks were often bought at a known MSRP.
+    """
+    rows = sorted(holdings, key=lambda h: h.total_value, reverse=True)
+    fallback = (valuation_date or date.today()).isoformat()
+    flag_at = money(insurance_threshold)
+
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(LEDGER_COLUMNS), lineterminator="\r\n")
+        writer.writeheader()
+        for h in rows:
+            deck = h.deck
+            writer.writerow(
+                {
+                    "Name": deck.name if deck else h.raw_name,
+                    "Set name": deck.set_name if deck else "",
+                    "Set code": h.set_code,
+                    "Collector number": "",
+                    "Foil": "",
+                    "Quantity": h.quantity,
+                    "Condition": h.condition,
+                    "Language": "en",
+                    "Scryfall ID": "",
+                    "Acquisition Date": "",
+                    "Source": "sealed",
+                    "Cost Basis": "" if h.cost_basis is None else cents(h.total_cost),
+                    "Market Value": "" if not h.has_price else cents(h.total_value),
+                    "Valuation Date": h.price_date.isoformat() if h.price_date else fallback,
+                    "Sold": "",
+                    "Fees": "",
+                    "Net Proceeds": "",
+                    "Realized Gain/Loss": "",
+                    "Insurance Flag": "Y" if h.total_value >= flag_at else "",
+                    "Photo Ref": "",
+                    "Notes": " · ".join(
+                        p for p in (f"MTGJSON {deck.uuid}" if deck else "", h.notes) if p
+                    ),
+                }
+            )
+    return rows
 
 
 def to_markdown(rows: Iterable[Sequence], headers: Sequence[str]) -> str:
