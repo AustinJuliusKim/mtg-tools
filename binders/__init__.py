@@ -31,6 +31,7 @@ from .aggregate import (
     summarize,
     top_n,
 )
+from .dashboard import build_dashboard, build_payload, render_html
 from .diff import Change, Diff, diff
 from .export import (
     to_buylist_csv,
@@ -81,6 +82,10 @@ __all__ = [
     "diff",
     "Diff",
     "Change",
+    # dashboard
+    "build_dashboard",
+    "build_payload",
+    "render_html",
     # export
     "to_manabox_csv",
     "to_buylist_csv",

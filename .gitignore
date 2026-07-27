@@ -3,8 +3,16 @@ __pycache__/
 .DS_Store
 .venv/
 
-# Generated outputs — regenerate from the exports rather than committing them
-buylist.csv
-ledger.csv
-mtg_collection_tracker.csv
-all.csv
+# Generated outputs — regenerate from the exports rather than committing them.
+# The repo is public and these embed the full inventory with valuations.
+#
+# Anchored with a leading slash on purpose: an unanchored `dashboard.html`
+# also matches binders/assets/dashboard.html, which is the page template and
+# must stay tracked.
+/buylist.csv
+/ledger.csv
+/mtg_collection_tracker.csv
+/all.csv
+/sell-list.csv
+/dashboard.html
+/*.html
