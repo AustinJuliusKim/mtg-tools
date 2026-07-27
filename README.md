@@ -124,8 +124,25 @@ gets submitted.
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -t .
+python3 run_tests.py          # preferred — adds the skip guard
+python3 run_tests.py -v
+python3 -m unittest discover -s tests -t .   # plain runner, no guard
 ```
+
+CI runs on every pull request and on pushes to `main`, across Python 3.9, 3.11
+and 3.13. There is no install step in the workflow on purpose: the package is
+stdlib-only, and a bare interpreter is what keeps that honest.
+
+`run_tests.py` fails the run if a test skips for any reason other than "the
+ManaBox exports aren't on disk". Off the dev machine 24 tests skip for exactly
+that reason — the whole vault oracle plus the real-export round-trip — so
+plain `unittest` would report a cheerful `OK (skipped=24)` and hide a genuine
+gap. All such skips route through `tests.support.require_exports`; anything
+else is a build failure.
+
+The tradeoff is deliberate: the exports are the actual collection with real
+valuations, so they stay out of git. CI covers the other 86 tests — parsing,
+both header dialects, merging, filters, tiering, exporters and the CLI.
 
 `tests/test_vault_oracle.py` checks the code against the hand-built tables in
 the vault, which were computed independently from the `.bak` exports — 752

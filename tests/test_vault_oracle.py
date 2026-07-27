@@ -17,18 +17,13 @@ import unittest
 from decimal import Decimal
 
 from binders import diff, load, load_many, merge, multi_copies, price_tiers, summarize
-
-DESKTOP = os.path.expanduser("~/Desktop")
-BINDERS = os.path.join(DESKTOP, "Binders.csv")
-BINDERS2 = os.path.join(DESKTOP, "Binders2.csv")
-BINDERS_BAK = os.path.join(DESKTOP, "Binders.csv.bak")
-BINDERS2_BAK = os.path.join(DESKTOP, "Binders2.csv.bak")
-
-
-def _require(*paths):
-    missing = [p for p in paths if not os.path.exists(p)]
-    if missing:
-        raise unittest.SkipTest(f"export not present: {', '.join(missing)}")
+from tests.support import (
+    BINDERS,
+    BINDERS2,
+    BINDERS2_BAK,
+    BINDERS_BAK,
+    require_exports as _require,
+)
 
 
 class TestVaultTable(unittest.TestCase):

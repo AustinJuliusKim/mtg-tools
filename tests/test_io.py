@@ -11,6 +11,7 @@ from decimal import Decimal
 from binders import load, load_many, save, validate
 from binders.io import MANABOX_COLUMNS, parse_row, to_row
 from binders.model import normalize_title
+from tests.support import BINDERS, require_exports
 
 HERE = os.path.dirname(__file__)
 FIXTURES = os.path.join(HERE, "fixtures")
@@ -191,10 +192,8 @@ class TestRoundTrip(unittest.TestCase):
         self.assertEqual(to_row(card)["Deck"], "Miirym")
 
     def test_real_export_round_trips_if_present(self):
-        real = os.path.expanduser("~/Desktop/Binders.csv")
-        if not os.path.exists(real):
-            self.skipTest("real export not present")
-        original, written = self._round_trip(real)
+        require_exports(BINDERS)
+        original, written = self._round_trip(BINDERS)
         self.assertEqual(original, written)
 
 
