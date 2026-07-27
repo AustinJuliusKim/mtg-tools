@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from decimal import Decimal
 from typing import Iterable, List, Sequence
@@ -21,6 +22,7 @@ from .aggregate import (
     summarize,
     top_n,
 )
+from .dashboard import build_payload, render_html
 from .diff import diff as diff_collections
 from .export import (
     multi_copy_table,
@@ -284,6 +286,31 @@ def cmd_ledger(args) -> int:
     return 0
 
 
+def cmd_dashboard(args) -> int:
+    raw = load_many(*args.files)
+    cards = merge(raw)
+    payload = build_payload(
+        cards, sources=[os.path.basename(p) for p in args.files], raw=raw
+    )
+    html = render_html(payload, title=args.title, standalone=not args.fragment)
+
+    with open(args.output, "w", encoding="utf-8") as handle:
+        handle.write(html)
+
+    size = len(html.encode("utf-8")) / 1024
+    print(
+        f"Wrote {args.output} — {len(cards)} rows, {cards.total_quantity} cards, "
+        f"{_money(cards.total_value)} ({size:.0f} KB, self-contained)"
+    )
+    if args.fragment:
+        print("Fragment mode: no <html>/<head>/<body>, ready to publish as an Artifact.")
+    if args.open:
+        import webbrowser
+
+        webbrowser.open("file://" + os.path.abspath(args.output))
+    return 0
+
+
 def cmd_validate(args) -> int:
     issues = []
     for path in args.files:
@@ -397,6 +424,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = with_files(sub.add_parser("ledger", help="write the tracking ledger CSV"))
     p.add_argument("-o", "--output", required=True)
     p.set_defaults(func=cmd_ledger)
+
+    p = with_files(sub.add_parser("dashboard", help="build the HTML triage dashboard"))
+    p.add_argument("-o", "--output", default="dashboard.html")
+    p.add_argument("--title", default="MTG Collection Triage")
+    p.add_argument(
+        "--fragment",
+        action="store_true",
+        help="omit <html>/<head>/<body> for publishing as a Claude Artifact",
+    )
+    p.add_argument("--open", action="store_true", help="open the file in a browser")
+    p.set_defaults(func=cmd_dashboard)
 
     p = sub.add_parser("validate", help="flag rows that need a human look")
     p.add_argument("files", nargs="+")

@@ -45,6 +45,7 @@ Doubling Season (foil)  FDN    mythic    x4   $36.04  $144.16  Binders2
 | `merge` | Combine exports into one deduplicated CSV |
 | `buylist` | Vendor submission list with per-card estimates |
 | `ledger` | The tracking ledger with tax and insurance columns |
+| `dashboard` | Build the self-contained HTML triage GUI |
 | `validate` | Flag rows that need a human look |
 
 Add `--markdown` to `summary`, `tiers`, `dupes` or `top` to get a pipe table
@@ -63,6 +64,35 @@ python3 -m binders filter ~/Desktop/Binders*.csv --price-min 20 --foil
 # Build the submission list
 python3 -m binders buylist ~/Desktop/Binders*.csv -o buylist.csv --min-price 1
 ```
+
+## The triage GUI
+
+```bash
+python3 -m binders dashboard ~/Desktop/Binders*.csv -o dashboard.html --open
+```
+
+One self-contained HTML file — no server, no network, no dependencies. Open it
+from disk, or add `--fragment` to publish it as a Claude Artifact.
+
+The point is the decision the CLI can't help with: keep or sell, card by card.
+Charts sit up top (where the value concentrates, what a buylist pays, value by
+binder, top sets), and below them a filterable table where each card gets a
+verdict against a live running total for the sell pile. Verdicts persist in
+browser storage keyed by card identity, so scanning another binder and
+regenerating doesn't wipe decisions already made. Export writes the sell pile in
+the same column shape `to_buylist_csv` produces.
+
+Two notes on how the money works:
+
+- **The page never recomputes the collection's figures.** Every aggregate comes
+  from the `Decimal` code in `aggregate` and is embedded as a formatted string.
+- **Per-card prices cross as integer cents**, because the one thing the page
+  does compute is the sell-pile total. It sums a band then applies that band's
+  rate once, mirroring `price_tiers` — verified against the real exports:
+  marking everything Sell reproduces `binders tiers` to the cent in all three
+  bands. A test pins the equivalence.
+
+The generated file embeds the whole inventory, so it's gitignored.
 
 ## Library
 
