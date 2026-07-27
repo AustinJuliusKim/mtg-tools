@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+
+# Generated outputs — regenerate from the exports rather than committing them
+buylist.csv
+ledger.csv
+mtg_collection_tracker.csv
+all.csv
