@@ -459,6 +459,36 @@ def cmd_sealed_template(args) -> int:
     return 0
 
 
+def cmd_sealed_dashboard(args) -> int:
+    from .sealed_dashboard import build_sealed_payload, render_sealed_html
+
+    holdings, issues = _sealed_load(args.file)
+    payload = build_sealed_payload(holdings, issues, source_file=args.file)
+    html = render_sealed_html(payload, title=args.title, standalone=not args.fragment)
+
+    with open(args.output, "w", encoding="utf-8") as handle:
+        handle.write(html)
+
+    meta = payload["meta"]
+    size = len(html.encode("utf-8")) / 1024
+    print(
+        f"Wrote {args.output} — {meta['rows']} rows, {meta['quantity']} decks, "
+        f"{meta['totalValue']} ({size:.0f} KB, self-contained)"
+    )
+    if meta["unpricedQuantity"]:
+        print(
+            f"{meta['unpricedQuantity']} deck(s) have no price — the page says so, "
+            f"and each row links out to look one up."
+        )
+    if args.fragment:
+        print("Fragment mode: no <html>/<head>/<body>, ready to publish as an Artifact.")
+    if args.open:
+        import webbrowser
+
+        webbrowser.open("file://" + os.path.abspath(args.output))
+    return 0
+
+
 def cmd_sealed_refresh(args) -> int:
     from .catalog import CATALOG_PATH, refresh
 
@@ -669,6 +699,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-o", "--output", default="sealed.csv")
     sp.add_argument("--force", action="store_true")
     sp.set_defaults(func=cmd_sealed_template)
+
+    sp = ssub.add_parser("dashboard", help="build the sealed keep/sell triage page")
+    sp.add_argument("file", help="sealed.csv")
+    sp.add_argument("-o", "--output", default="sealed.html")
+    sp.add_argument("--title", default="Sealed Collection Triage")
+    sp.add_argument("--fragment", action="store_true",
+                    help="omit <html>/<head>/<body> for publishing as a Claude Artifact")
+    sp.add_argument("--open", action="store_true", help="open the file in a browser")
+    sp.set_defaults(func=cmd_sealed_dashboard)
 
     sp = ssub.add_parser("refresh-catalog",
                          help="re-fetch the deck catalog from MTGJSON (networked)")

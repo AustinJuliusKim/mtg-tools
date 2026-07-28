@@ -23,6 +23,25 @@ PAYLOAD_RE = re.compile(
 )
 
 
+def assert_no_remote_subresources(case, html: str) -> None:
+    """No remote *subresource* may appear — the rule the CSP actually enforces.
+
+    Shared with the sealed dashboard tests so one definition governs both pages.
+    Deliberately says nothing about `<a href>`: an anchor is navigation, not a
+    fetch, and banning it would be a proxy for the real rule rather than the
+    rule itself.
+    """
+    case.assertNotRegex(html, r"<script[^>]+\ssrc\s*=")
+    case.assertNotRegex(html, r"<link[^>]+stylesheet")
+    case.assertNotRegex(html, r"<(?:img|iframe|embed|object|video|audio|source)\b[^>]*\ssrc\s*=")
+    case.assertNotIn("@import", html)
+    case.assertNotRegex(html, r"url\(\s*['\"]?https?:")
+    case.assertNotIn("fonts.googleapis", html)
+    case.assertNotRegex(html, r"\bfetch\s*\(\s*['\"]https?:")
+    case.assertNotRegex(html, r"new\s+(?:WebSocket|EventSource)\s*\(")
+    case.assertNotRegex(html, r"XMLHttpRequest")
+
+
 def _payload_from(html: str) -> dict:
     match = PAYLOAD_RE.search(html)
     assert match, "payload script block not found"
@@ -218,14 +237,20 @@ class TestRender(unittest.TestCase):
         self.assertNotIn("__TITLE__", self.html)
 
     def test_nothing_is_fetched_from_a_remote_host(self):
-        """The Artifact CSP blocks every external host, so this is a test."""
-        self.assertNotRegex(self.html, r'src\s*=\s*["\']https?:')
-        self.assertNotRegex(self.html, r'href\s*=\s*["\']https?:')
-        self.assertNotRegex(self.html, r"<script[^>]+\ssrc\s*=")
-        self.assertNotRegex(self.html, r"<link[^>]+stylesheet")
-        self.assertNotIn("@import", self.html)
-        self.assertNotRegex(self.html, r"url\(\s*['\"]?https?:")
-        self.assertNotIn("fonts.googleapis", self.html)
+        """The Artifact CSP blocks every external host, so this is a test.
+
+        Subresources only. An `<a href>` is navigation, which CSP does not block
+        and which the sealed page uses to link out to price lookups —
+        `assert_no_remote_subresources` is shared so both pages hold the same
+        line, and `test_external_urls_are_only_anchors` pins where URLs may
+        legally appear.
+        """
+        assert_no_remote_subresources(self, self.html)
+
+    def test_the_singles_page_has_no_external_urls_at_all(self):
+        """Nothing on this page needs to link out, so nothing should."""
+        self.assertNotIn("http://", self.html)
+        self.assertNotIn("https://", self.html)
 
     def test_standalone_is_a_complete_document(self):
         self.assertTrue(self.html.startswith("<!doctype html>"))
