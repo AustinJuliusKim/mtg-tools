@@ -1,22 +1,39 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { Alert, Badge, Button, Card, Group, Select, Text, Title } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { api, ApiError, type ImportDetail } from '../api/client'
+import { useResource } from '../components/useResource'
+import { IssuesSkeleton, Refetching } from '../components/Skeletons'
+import { Skeleton } from '@mantine/core'
 
 export function Review({ onChange }: { onChange: () => void }) {
   const { id } = useParams()
   const importId = Number(id)
-  const [detail, setDetail] = useState<ImportDetail | null>(null)
   const [busy, setBusy] = useState(false)
+  const [revision, setRevision] = useState(0)
   const navigate = useNavigate()
 
-  const load = useCallback(() => {
-    api.importDetail(importId).then(setDetail).catch(() => undefined)
-  }, [importId])
-  useEffect(load, [load])
+  const { data: detail, showSkeleton, refetching } = useResource<ImportDetail>(
+    () => api.importDetail(importId),
+    [importId, revision],
+  )
+  const load = useCallback(() => setRevision((n) => n + 1), [])
 
-  if (!detail) return null
+  // Previously returned null here, so the screen was simply blank while the
+  // request was in flight.
+  if (showSkeleton || !detail) {
+    return (
+      <>
+        <Skeleton height={24} width={260} radius="sm" mb={8} />
+        <Skeleton height={12} width={380} radius="sm" mb="md" />
+        <Skeleton height={58} radius="md" mb="md" />
+        <Skeleton height={34} width={280} radius="sm" mb="md" />
+        <IssuesSkeleton />
+      </>
+    )
+  }
+
   const { record, blocking } = detail
 
   const act = async (fn: () => Promise<unknown>, message: string) => {
@@ -60,6 +77,7 @@ export function Review({ onChange }: { onChange: () => void }) {
         </Button>
       </Group>
 
+      <Refetching active={refetching}>
       {detail.issues.map((issue) => (
         <Card key={issue.code} withBorder mb="sm" padding="sm"
               style={issue.blocking ? { borderLeft: '3px solid var(--mantine-color-orange-6)' } : undefined}>
@@ -103,6 +121,7 @@ export function Review({ onChange }: { onChange: () => void }) {
         </Card>
       ))}
       {!detail.issues.length && <Text c="dimmed">No issues found in this file.</Text>}
+      </Refetching>
     </>
   )
 }

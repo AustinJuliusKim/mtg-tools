@@ -5,7 +5,7 @@ import {
   AppShell,
   Button,
   Group,
-  Loader,
+  Skeleton,
   Text,
   Tooltip,
   useComputedColorScheme,
@@ -18,6 +18,8 @@ import { Collection } from './routes/Collection'
 import { Imports } from './routes/Imports'
 import { Review } from './routes/Review'
 import { History } from './routes/History'
+import { ExportPanel, Sell } from './routes/Sell'
+import { ChartsSkeleton, HeroSkeleton } from './components/Skeletons'
 
 /** Anything that changes data bumps this so views refetch. */
 export const useRevision = () => {
@@ -66,10 +68,23 @@ export function App() {
   }
 
   if (!ready) {
+    // A centred spinner reserves no space, so the whole layout snaps into
+    // place once the session resolves. The chrome is static — render it.
     return (
-      <Group justify="center" mt="xl">
-        <Loader />
-      </Group>
+      <AppShell header={{ height: 56 }} padding="md">
+        <AppShell.Header>
+          <Group h="100%" px="md" gap="lg">
+            <Text fw={650}>mtg-tools</Text>
+            {[70, 52, 40, 58].map((width, i) => (
+              <Skeleton key={i} height={11} width={width} radius="sm" />
+            ))}
+          </Group>
+        </AppShell.Header>
+        <AppShell.Main>
+          <HeroSkeleton />
+          <ChartsSkeleton />
+        </AppShell.Main>
+      </AppShell>
     )
   }
 
@@ -81,6 +96,7 @@ export function App() {
           {[
             ['/', 'Collection'],
             ['/imports', 'Import'],
+            ['/sell', 'Sell'],
             ['/history', 'History'],
           ].map(([to, label]) => (
             <NavLink
@@ -118,7 +134,16 @@ export function App() {
           <Route path="/" element={<Collection revision={revision} onChange={bump} />} />
           <Route path="/imports" element={<Imports onChange={bump} />} />
           <Route path="/imports/:id" element={<Review onChange={bump} />} />
-          <Route path="/history" element={<History revision={revision} />} />
+          <Route path="/sell" element={<Sell revision={revision} onChange={bump} />} />
+          <Route
+            path="/history"
+            element={
+              <>
+                <History revision={revision} />
+                <ExportPanel />
+              </>
+            }
+          />
         </Routes>
       </AppShell.Main>
     </AppShell>
