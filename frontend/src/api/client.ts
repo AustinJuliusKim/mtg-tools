@@ -113,6 +113,53 @@ export interface ImportDetail {
   }[]
 }
 
+export interface SaleRecord {
+  id: number
+  subject_kind: string
+  subject_id: number
+  quantity: number
+  channel: string
+  status: 'listed' | 'sold' | 'cancelled'
+  listed_at: string | null
+  listed_cents: number | null
+  sold_at: string | null
+  sold_cents: number | null
+  fees_cents: number
+  shipping_cents: number
+  net_cents: number | null
+  realized_gain_cents: number | null
+  notes: string
+  name: string | null
+}
+
+export interface QueueItem {
+  kind: 'holding' | 'sealed'
+  id: number
+  name: string
+  setCode: string
+  quantity: number
+  priceCents: number | null
+  marketCents: number
+  costBasisCents: number | null
+  sale: SaleRecord | null
+}
+
+export interface SalesSummary {
+  soldCount: number
+  grossCents: number
+  costsCents: number
+  netCents: number
+  realizedGainCents: number
+  gainKnownFor: number
+  listedCount: number
+  listedCents: number
+  gross: string
+  costs: string
+  net: string
+  realizedGain: string
+  listed: string
+}
+
 export interface BulkAction {
   key: string
   label: string
@@ -239,6 +286,55 @@ export const api = {
 
   discardImport: (id: number) =>
     request<{ discarded: number }>(`/api/imports/${id}/discard`, { method: 'POST' }),
+
+  salesQueue: () => request<QueueItem[]>('/api/sales/queue'),
+
+  sales: (status?: string) =>
+    request<SaleRecord[]>(`/api/sales${status ? `?status=${status}` : ''}`),
+
+  salesSummary: () => request<SalesSummary>('/api/sales/summary'),
+
+  listForSale: (body: {
+    kind: string
+    id: number
+    channel?: string
+    listed?: string
+    quantity?: number
+  }) =>
+    request<{ saleId: number }>('/api/sales/list', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  recordSale: (
+    saleId: number,
+    body: { sold: string; fees?: string; shipping?: string; notes?: string },
+  ) =>
+    request<{
+      saleId: number
+      netCents: number
+      realizedGainCents: number | null
+      removedFromCollection: boolean
+      net: string
+      realizedGain: string
+    }>(`/api/sales/${saleId}/sold`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  cancelSale: (saleId: number) =>
+    request<{ cancelled: number }>(`/api/sales/${saleId}/cancel`, { method: 'POST' }),
+
+  exportManifest: () =>
+    request<{
+      tables: string[]
+      exportedAt: string
+      rowCounts: Record<string, number>
+      singles: { quantity: number; valueCents: number; value: string }
+      notes: string[]
+    }>('/api/export/manifest'),
 
   history: () => request<Operation[]>('/api/history'),
 

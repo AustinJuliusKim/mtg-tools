@@ -545,3 +545,279 @@ class TestInsights(Base):
         body = empty.get("/api/collection/insights").get_json()
         self.assertEqual(body["concentration"]["points"], [])
         self.assertEqual(sum(t["marketCents"] for t in body["tiers"]), 0)
+
+
+class TestSalesAndExport(Base):
+    """The sale lifecycle and the escape hatch."""
+
+    def setUp(self):
+        super().setUp()
+        self.commit()
+        self.ids = [r["id"] for r in self.rows()["rows"]]
+        # Mark the three priciest to sell; the queue is verdict-driven.
+        self.post("/api/bulk", {"action": "verdict", "value": "sell",
+                                "ids": self.ids[:3]})
+
+    # -- queue ------------------------------------------------------------
+
+    def test_queue_is_driven_by_verdicts(self):
+        queue = self.client.get("/api/sales/queue").get_json()
+        self.assertEqual(len(queue), 3)
+        self.assertEqual(queue[0]["name"], "Mox Amber")
+        self.assertIsNone(queue[0]["sale"])
+
+    def test_listing_then_selling(self):
+        queue = self.client.get("/api/sales/queue").get_json()
+        subject = queue[0]
+
+        listed = self.post("/api/sales/list", {
+            "kind": subject["kind"], "id": subject["id"], "channel": "ebay",
+        })
+        self.assertEqual(listed.status_code, 201)
+        sale_id = listed.get_json()["saleId"]
+
+        sold = self.post(f"/api/sales/{sale_id}/sold", {
+            "sold": "200.00", "fees": "26.00", "shipping": "5.00",
+        }).get_json()
+
+        # 20000 - 2600 - 500
+        self.assertEqual(sold["netCents"], 16900)
+        self.assertEqual(sold["net"], "$169.00")
+        self.assertTrue(sold["removedFromCollection"])
+
+    def test_a_sold_card_leaves_the_collection(self):
+        """Leaving it in would inflate every valuation after the fact."""
+        before = self.rows()["totals"]["quantity"]
+        queue = self.client.get("/api/sales/queue").get_json()
+        sale_id = self.post("/api/sales/list", {
+            "kind": queue[0]["kind"], "id": queue[0]["id"],
+        }).get_json()["saleId"]
+        self.post(f"/api/sales/{sale_id}/sold", {"sold": "200.00"})
+
+        self.assertEqual(
+            self.rows()["totals"]["quantity"], before - queue[0]["quantity"]
+        )
+
+    def test_partial_quantity_leaves_the_rest(self):
+        queue = self.client.get("/api/sales/queue").get_json()
+        mox = next(q for q in queue if q["name"] == "Mox Amber")
+        self.assertEqual(mox["quantity"], 3)
+
+        sale_id = self.post("/api/sales/list", {
+            "kind": mox["kind"], "id": mox["id"], "quantity": 1,
+        }).get_json()["saleId"]
+        result = self.post(f"/api/sales/{sale_id}/sold", {"sold": "80.00"}).get_json()
+
+        self.assertFalse(result["removedFromCollection"])
+        row = next(r for r in self.rows()["rows"] if r["title"] == "Mox Amber")
+        self.assertEqual(row["quantity"], 2)
+
+    def test_realized_gain_is_null_without_a_cost_basis(self):
+        """An unknown basis must not become a gain equal to the sale price —
+        that number would land straight in a tax figure."""
+        queue = self.client.get("/api/sales/queue").get_json()
+        sale_id = self.post("/api/sales/list", {
+            "kind": queue[0]["kind"], "id": queue[0]["id"],
+        }).get_json()["saleId"]
+        sold = self.post(f"/api/sales/{sale_id}/sold", {"sold": "200.00"}).get_json()
+
+        self.assertIsNone(sold["realizedGainCents"])
+        summary = self.client.get("/api/sales/summary").get_json()
+        self.assertEqual(summary["gainKnownFor"], 0)
+
+    def test_cannot_list_the_same_thing_twice(self):
+        queue = self.client.get("/api/sales/queue").get_json()
+        body = {"kind": queue[0]["kind"], "id": queue[0]["id"]}
+        self.post("/api/sales/list", body)
+        again = self.post("/api/sales/list", body)
+        self.assertEqual(again.status_code, 400)
+        self.assertIn("already listed", again.get_json()["error"])
+
+    def test_cannot_list_more_than_you_own(self):
+        queue = self.client.get("/api/sales/queue").get_json()
+        response = self.post("/api/sales/list", {
+            "kind": queue[0]["kind"], "id": queue[0]["id"], "quantity": 99,
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_negative_amounts_are_refused(self):
+        queue = self.client.get("/api/sales/queue").get_json()
+        sale_id = self.post("/api/sales/list", {
+            "kind": queue[0]["kind"], "id": queue[0]["id"],
+        }).get_json()["saleId"]
+        response = self.post(f"/api/sales/{sale_id}/sold",
+                             {"sold": "100.00", "fees": "-5"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_summary_totals(self):
+        queue = self.client.get("/api/sales/queue").get_json()
+        sale_id = self.post("/api/sales/list", {
+            "kind": queue[0]["kind"], "id": queue[0]["id"],
+        }).get_json()["saleId"]
+        self.post(f"/api/sales/{sale_id}/sold",
+                  {"sold": "200.00", "fees": "26.00", "shipping": "5.00"})
+
+        summary = self.client.get("/api/sales/summary").get_json()
+        self.assertEqual(summary["soldCount"], 1)
+        self.assertEqual(summary["grossCents"], 20000)
+        self.assertEqual(summary["costsCents"], 3100)
+        self.assertEqual(summary["netCents"], 16900)
+        self.assertEqual(summary["net"], "$169.00")
+
+    def test_a_sale_is_undoable(self):
+        before = self.rows()["totals"]["quantity"]
+        queue = self.client.get("/api/sales/queue").get_json()
+        sale_id = self.post("/api/sales/list", {
+            "kind": queue[0]["kind"], "id": queue[0]["id"],
+        }).get_json()["saleId"]
+        self.post(f"/api/sales/{sale_id}/sold", {"sold": "200.00"})
+        self.assertLess(self.rows()["totals"]["quantity"], before)
+
+        self.post("/api/undo")
+        self.assertEqual(self.rows()["totals"]["quantity"], before)
+
+    # -- export -----------------------------------------------------------
+
+    def test_manifest_counts_the_tables(self):
+        body = self.client.get("/api/export/manifest").get_json()
+        self.assertIn("holdings", body["tables"])
+        self.assertEqual(body["rowCounts"]["holdings"], 6)
+        self.assertEqual(body["singles"]["value"], "$431.57")
+
+    def test_table_export_writes_dollars_not_cents(self):
+        """A spreadsheet should show 75.17, not 7517."""
+        text = self.client.get("/api/export/table/holdings").get_data(as_text=True)
+        self.assertIn("75.17", text)
+        self.assertNotIn("7517", text)
+        # …and the header says `price`, not `price_cents`.
+        self.assertIn("price,", text.splitlines()[0])
+
+    def test_unknown_table_is_refused(self):
+        self.assertEqual(
+            self.client.get("/api/export/table/sqlite_master").status_code, 404
+        )
+
+    def test_ledger_uses_the_vault_schema(self):
+        import csv as _csv
+        from binders.export import LEDGER_COLUMNS
+
+        text = self.client.get("/api/export/ledger").get_data(as_text=True)
+        rows = list(_csv.DictReader(io.StringIO(text)))
+        self.assertEqual(list(rows[0].keys()), list(LEDGER_COLUMNS))
+        self.assertEqual(len(rows), 6)
+
+    def test_ledger_carries_sale_figures_once_sold(self):
+        import csv as _csv
+
+        queue = self.client.get("/api/sales/queue").get_json()
+        mox = next(q for q in queue if q["name"] == "Mox Amber")
+        sale_id = self.post("/api/sales/list", {
+            "kind": mox["kind"], "id": mox["id"], "quantity": 1,
+        }).get_json()["saleId"]
+        self.post(f"/api/sales/{sale_id}/sold",
+                  {"sold": "80.00", "fees": "10.40"})
+
+        text = self.client.get("/api/export/ledger").get_data(as_text=True)
+        row = next(
+            r for r in _csv.DictReader(io.StringIO(text)) if r["Name"] == "Mox Amber"
+        )
+        self.assertEqual(row["Sold"], "80.00")
+        self.assertEqual(row["Net Proceeds"], "69.60")
+
+    def test_a_sold_and_gone_item_still_appears_in_the_ledger(self):
+        """The bug live verification caught.
+
+        A fully-sold item is deleted from holdings, so a ledger built only from
+        the collection dropped it entirely — losing exactly the realized-gain
+        record the ledger exists for. `subject_name` is captured at listing time
+        so the row survives its subject.
+        """
+        import csv as _csv
+
+        queue = self.client.get("/api/sales/queue").get_json()
+        target = queue[0]
+        sale_id = self.post("/api/sales/list", {
+            "kind": target["kind"], "id": target["id"],
+        }).get_json()["saleId"]
+        self.post(f"/api/sales/{sale_id}/sold",
+                  {"sold": "300.00", "fees": "39.00"})
+
+        # Gone from the collection…
+        self.assertNotIn(
+            target["name"], [r["title"] for r in self.rows()["rows"]]
+        )
+
+        # …but present in the ledger, with its figures intact.
+        text = self.client.get("/api/export/ledger").get_data(as_text=True)
+        rows = list(_csv.DictReader(io.StringIO(text)))
+        sold_row = next((r for r in rows if r["Name"] == target["name"]), None)
+        self.assertIsNotNone(sold_row, "the sold item vanished from the ledger")
+        self.assertEqual(sold_row["Sold"], "300.00")
+        self.assertEqual(sold_row["Net Proceeds"], "261.00")
+        self.assertEqual(sold_row["Market Value"], "")  # no longer owned
+        self.assertTrue(sold_row["Source"].startswith("sold"))
+
+    def test_a_partially_sold_item_is_not_duplicated_in_the_ledger(self):
+        """It is still held, so it must appear once — as a holding."""
+        import csv as _csv
+
+        queue = self.client.get("/api/sales/queue").get_json()
+        mox = next(q for q in queue if q["name"] == "Mox Amber")
+        sale_id = self.post("/api/sales/list", {
+            "kind": mox["kind"], "id": mox["id"], "quantity": 1,
+        }).get_json()["saleId"]
+        self.post(f"/api/sales/{sale_id}/sold", {"sold": "80.00"})
+
+        text = self.client.get("/api/export/ledger").get_data(as_text=True)
+        rows = [
+            r for r in _csv.DictReader(io.StringIO(text)) if r["Name"] == "Mox Amber"
+        ]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Quantity"], "2")
+
+    def test_bundle_contains_everything(self):
+        import zipfile
+
+        response = self.client.get("/api/export/bundle")
+        self.assertEqual(response.status_code, 200)
+        archive = zipfile.ZipFile(io.BytesIO(response.get_data()))
+        names = archive.namelist()
+
+        self.assertIn("manifest.json", names)
+        self.assertIn("mtg_collection_tracker.csv", names)
+        self.assertIn("csv/holdings.csv", names)
+        # The zip must be readable — a corrupt archive is worse than none.
+        self.assertIsNone(archive.testzip())
+
+    def test_bundle_includes_the_database_for_a_file_backed_app(self):
+        import sqlite3 as _sqlite3
+        import tempfile
+        import zipfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "c.db")
+            app = create_app(path, testing=True)
+            client = app.test_client()
+            token = client.get("/api/session").get_json()["csrfToken"]
+            import_id = client.post(
+                "/api/imports",
+                data={"file": (io.BytesIO(read(SAMPLE)), "sample.csv")},
+                content_type="multipart/form-data",
+                headers={"X-CSRF-Token": token},
+            ).get_json()["importId"]
+            client.post(f"/api/imports/{import_id}/commit",
+                        headers={"X-CSRF-Token": token})
+
+            archive = zipfile.ZipFile(
+                io.BytesIO(client.get("/api/export/bundle").get_data())
+            )
+            self.assertIn("collection.sqlite", archive.namelist())
+
+            # The extracted copy must be a working database, not just bytes.
+            out = os.path.join(tmp, "restored.sqlite")
+            with open(out, "wb") as handle:
+                handle.write(archive.read("collection.sqlite"))
+            restored = _sqlite3.connect(out)
+            count = restored.execute("SELECT COUNT(*) FROM holdings").fetchone()[0]
+            restored.close()
+            self.assertEqual(count, 6)

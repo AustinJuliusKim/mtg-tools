@@ -26,6 +26,11 @@ import {
   type Insights as InsightsData,
 } from '../api/client'
 import { useSelection } from '../components/useSelection'
+import {
+  ChartsSkeleton,
+  HeroSkeleton,
+  Refetching,
+} from '../components/Skeletons'
 import { Insights } from './Insights'
 
 const PER_PAGE = 50
@@ -56,6 +61,12 @@ export function Collection({
   const [insights, setInsights] = useState<InsightsData | null>(null)
   const [actions, setActions] = useState<BulkAction[]>([])
   const [loading, setLoading] = useState(true)
+
+  // First load gets skeletons; every later fetch keeps the previous render and
+  // dims it. This view refetches on each filter keystroke, sort and page
+  // change — flashing grey bars that often would be worse than the wait.
+  const firstLoad = loading && data === null
+  const refetching = loading && data !== null
 
   const filters: Filters = useMemo(() => {
     const out: Filters = {}
@@ -113,6 +124,7 @@ export function Collection({
 
   return (
     <>
+      {firstLoad ? <HeroSkeleton /> : (
       <Group justify="space-between" align="flex-end" mb="md">
         <div>
           <Text c="dimmed" fz="xs" tt="uppercase" fw={600}>
@@ -136,6 +148,7 @@ export function Collection({
           </Text>
         </div>
       </Group>
+      )}
 
       {empty && (
         <Alert mb="md" title="Nothing here yet">
@@ -143,7 +156,12 @@ export function Collection({
         </Alert>
       )}
 
-      {insights && !empty && <Insights data={insights} />}
+      {firstLoad && <ChartsSkeleton />}
+      {insights && !empty && !firstLoad && (
+        <Refetching active={refetching}>
+          <Insights data={insights} />
+        </Refetching>
+      )}
 
       <Paper withBorder p="xs" mb="md">
         <Group gap="xs">

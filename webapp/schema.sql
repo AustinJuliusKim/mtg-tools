@@ -121,6 +121,11 @@ CREATE TABLE IF NOT EXISTS sales (
     id                  INTEGER PRIMARY KEY,
     subject_kind        TEXT    NOT NULL CHECK (subject_kind IN ('holding', 'sealed')),
     subject_id          INTEGER NOT NULL,
+    -- Denormalized at listing time on purpose. A fully-sold item is deleted
+    -- from holdings, and without its name here the sale would vanish from the
+    -- ledger — losing exactly the realized-gain record the ledger exists for.
+    subject_name        TEXT    NOT NULL DEFAULT '',
+    subject_set         TEXT    NOT NULL DEFAULT '',
     quantity            INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
     channel             TEXT    NOT NULL DEFAULT '',
     status              TEXT    NOT NULL DEFAULT 'listed'

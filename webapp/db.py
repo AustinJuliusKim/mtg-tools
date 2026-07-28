@@ -144,6 +144,8 @@ def init_db(conn: sqlite3.Connection) -> None:
     with open(SCHEMA_PATH, encoding="utf-8") as handle:
         conn.executescript(handle.read())
 
+    _add_missing_columns(conn)
+
     row = conn.execute("SELECT version FROM schema_version").fetchone()
     if row is None:
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
@@ -152,6 +154,21 @@ def init_db(conn: sqlite3.Connection) -> None:
             f"database is schema v{row['version']}, this build expects "
             f"v{SCHEMA_VERSION} — no migration path is defined yet"
         )
+
+
+#: Columns added after the first release. Applied idempotently so an existing
+#: database picks them up without a migration framework.
+LATE_COLUMNS = (
+    ("sales", "subject_name", "TEXT NOT NULL DEFAULT ''"),
+    ("sales", "subject_set", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    for table, column, decl in LATE_COLUMNS:
+        existing = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 @contextmanager
