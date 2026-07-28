@@ -53,6 +53,11 @@ from .sealed import (
     save_sealed,
     summarize_sealed,
 )
+from .sealed_dashboard import (
+    build_sealed_dashboard,
+    build_sealed_payload,
+    render_sealed_html,
+)
 from .model import Card, Collection, Tier, money, normalize_title
 
 __version__ = "0.1.0"
@@ -105,6 +110,9 @@ __all__ = [
     "resolve",
     "summarize_sealed",
     "diff_sealed",
+    "build_sealed_dashboard",
+    "build_sealed_payload",
+    "render_sealed_html",
     # export
     "to_manabox_csv",
     "to_buylist_csv",
