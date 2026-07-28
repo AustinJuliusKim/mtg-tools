@@ -85,13 +85,16 @@ jobs:
       - name: Byte-compile
         run: python -m compileall -q webapp tests_webapp run_webapp_tests.py
 
+      # This suite is also where the one-way dependency is enforced, and it
+      # matters that it runs *here* — in the one job that has Flask installed.
+      # A library module that quietly imported Flask would still pass the `test`
+      # job above, because that job never has it to import.
+      #
+      # tests_webapp/test_boundary.py does the checking: it parses every binders
+      # module's AST for third-party imports, and spawns a subprocess to confirm
+      # importing the library leaves sys.modules free of flask/werkzeug/jinja2.
+      # An earlier version of this workflow repeated that as an inline `python
+      # -c`, which YAML folded onto one line and broke; one assertion with a
+      # single home beats two copies that drift.
       - name: Run the webapp suite
         run: python -W error::ResourceWarning run_webapp_tests.py -v
-
-      - name: Confirm binders still needs nothing
-        # A dependency creeping into the library would pass the job above only
-        # because that job never imports the web layer. This catches it.
-        run: python -c "
-          import sys, binders, binders.cli, binders.dashboard, binders.sealed_dashboard;
-          bad = [m for m in sys.modules if m.split('.')[0] in ('flask','werkzeug','jinja2','click')];
-          sys.exit('binders pulled in ' + ','.join(bad) if bad else 0)"
