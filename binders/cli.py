@@ -286,6 +286,196 @@ def cmd_ledger(args) -> int:
     return 0
 
 
+# --- sealed ----------------------------------------------------------------
+
+
+def _sealed_load(path):
+    from .sealed import load_sealed, resolve
+
+    return resolve(load_sealed(path))
+
+
+def cmd_sealed_summary(args) -> int:
+    from .sealed import summarize_sealed
+
+    holdings, issues = _sealed_load(args.file)
+    s = summarize_sealed(holdings)
+
+    print(f"Rows            {s.rows}")
+    print(f"Decks           {s.quantity} ({s.decks} distinct)")
+    print(f"Market value    {_money(s.total_value)}")
+    if s.total_cost is not None:
+        gain = s.total_gain or Decimal("0")
+        sign = "+" if gain >= 0 else ""
+        print(f"Cost basis      {_money(s.total_cost)}  (gain {sign}{_money(gain)})")
+    if s.newest_price_date:
+        print(f"Priced          {s.oldest_price_date} to {s.newest_price_date}")
+
+    # Never let a partial valuation read as a complete one.
+    if s.unpriced_quantity:
+        print(
+            f"\n⚠ {s.unpriced_quantity} of {s.quantity} decks have no price — "
+            f"{_money(s.total_value)} is a floor, not the total."
+        )
+    if s.unresolved_rows:
+        print(f"⚠ {s.unresolved_rows} row(s) did not match a known deck. Run: sealed doctor")
+
+    if s.by_year:
+        print("\nBy year")
+        print(_table(
+            [[y, q, _money(v)] for y, (q, v) in s.by_year.items()],
+            ["Year", "Decks", "Value"],
+            markdown=args.markdown,
+        ))
+
+    top = sorted(holdings, key=lambda h: h.total_value, reverse=True)[: args.top]
+    if top:
+        print(f"\nTop {len(top)} by value")
+        print(_table(
+            [[h.display, f"x{h.quantity}", _money(h.total_value)] for h in top],
+            ["Deck", "Qty", "Value"],
+            markdown=args.markdown,
+        ))
+    return 0
+
+
+def cmd_sealed_doctor(args) -> int:
+    from .sealed import save_sealed
+
+    holdings, issues = _sealed_load(args.file)
+    actionable = [i for i in issues if i.level != "info" or args.all]
+
+    if not actionable:
+        print("Nothing to fix — every row resolves and every price has a date.")
+        return 0
+
+    by_code = group_issues(actionable)
+    for code, group in by_code.items():
+        print(f"\n{code} ({len(group)})")
+        for issue in group:
+            line = f"line {issue.holding.line}" if issue.holding else "—"
+            print(f"  [{line}] {issue.message}")
+
+    if args.fix_sets:
+        pinned = [h for h in holdings if h.resolved and not h.set_hint]
+        save_sealed(holdings, args.file, pin_sets=True)
+        print(f"\nWrote {args.file} with the Set column filled on {len(pinned)} resolved row(s).")
+        print("Ambiguous rows are untouched — pick a set for those by hand.")
+
+    errors = [i for i in actionable if i.level == "error"]
+    print(f"\n{len(actionable)} item(s) need attention, {len(errors)} of them errors.")
+    return 1 if errors else 0
+
+
+def cmd_sealed_catalog(args) -> int:
+    from .catalog import load_catalog
+
+    catalog = load_catalog()
+    decks = catalog.search(args.search) if args.search else list(catalog)
+    decks = decks[: args.limit]
+
+    print(_table(
+        [[d.name, d.set_code, d.release_date[:10], d.ids.get("tcgplayerProductId", "—")]
+         for d in decks],
+        ["Deck", "Set", "Released", "TCGplayer ID"],
+        markdown=args.markdown,
+    ))
+    print(f"\n{len(decks)} shown of {len(catalog)} known commander decks.")
+    if not args.search:
+        ambiguous = catalog.ambiguous_nicknames()
+        print(
+            f"{len(ambiguous)} nickname(s) are shared by two printings and need a "
+            f"Set to disambiguate."
+        )
+    return 0
+
+
+def cmd_sealed_snapshot(args) -> int:
+    from .sealed import load_sealed, save_sealed, snapshot_path
+
+    holdings = load_sealed(args.file)
+    os.makedirs(args.dir, exist_ok=True)
+    target = snapshot_path(args.dir)
+    if os.path.exists(target) and not args.force:
+        print(f"error: {target} already exists. Pass --force to overwrite.", file=sys.stderr)
+        return 2
+    save_sealed(holdings, target)
+    print(f"Wrote {target} — {len(holdings)} rows.")
+    return 0
+
+
+def cmd_sealed_diff(args) -> int:
+    from .sealed import diff_sealed
+
+    old, _ = _sealed_load(args.old)
+    new, _ = _sealed_load(args.new)
+    result = diff_sealed(old, new)
+
+    print(f"{args.old} -> {args.new}")
+    print(f"  added            {len(result.added):>4}")
+    print(f"  removed          {len(result.removed):>4}")
+    print(f"  quantity changed {len(result.quantity_changed):>4}")
+    print(f"  price changed    {len(result.price_changed):>4}")
+    print(f"  unchanged        {len(result.unchanged):>4}")
+    print(f"  net value        {_money(result.value_delta)}")
+
+    if result.price_changed:
+        print("\nPrice moves")
+        rows = []
+        for c in result.price_changed:
+            pct = "" if c.pct is None else f"{c.pct:+.1f}%"
+            rows.append([
+                c.display,
+                f"{_money(c.before.price or 0)} -> {_money(c.after.price or 0)}",
+                _money(c.value_delta),
+                pct,
+            ])
+        print(_table(rows, ["Deck", "Price", "Value delta", "Change"]))
+    return 0
+
+
+def cmd_sealed_ledger(args) -> int:
+    from .export import to_sealed_ledger_csv
+
+    holdings, _ = _sealed_load(args.file)
+    rows = to_sealed_ledger_csv(holdings, args.output)
+    print(f"Wrote {len(rows)} rows to {args.output}")
+    print("Same columns as the singles ledger, so both piles can live in one file.")
+    return 0
+
+
+def cmd_sealed_template(args) -> int:
+    from .sealed import SEALED_COLUMNS
+
+    if os.path.exists(args.output) and not args.force:
+        print(f"error: {args.output} already exists. Pass --force to overwrite.", file=sys.stderr)
+        return 2
+    with open(args.output, "w", newline="", encoding="utf-8") as handle:
+        handle.write(",".join(SEALED_COLUMNS) + "\r\n")
+        handle.write("Sneak Attack,,1,sealed,,,,,\r\n")
+        handle.write("Heavenly Inferno,CMD,1,sealed,,,,,a Set is only needed when a name is ambiguous\r\n")
+    print(f"Wrote {args.output}. Add a row per deck — Name and Quantity are enough to start.")
+    print("Then run: python3 -m binders sealed doctor " + args.output)
+    return 0
+
+
+def cmd_sealed_refresh(args) -> int:
+    from .catalog import CATALOG_PATH, refresh
+
+    print(f"Fetching MTGJSON SetList (this is the only networked command)...")
+    decks, added, removed = refresh(write=not args.dry_run)
+    print(f"{len(decks)} commander decks found.")
+    for deck in added:
+        print(f"  + {deck.display}  {deck.release_date[:10]}")
+    for deck in removed:
+        print(f"  - {deck.display}")
+    if not added and not removed:
+        print("No change — the vendored catalog is already current.")
+    if args.dry_run:
+        print(f"\n--dry-run: {CATALOG_PATH} not written.")
+    return 0
+
+
 def cmd_dashboard(args) -> int:
     raw = load_many(*args.files)
     cards = merge(raw)
@@ -435,6 +625,56 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--open", action="store_true", help="open the file in a browser")
     p.set_defaults(func=cmd_dashboard)
+
+    # --- sealed: its own sub-tree, since it has a different input format -----
+    sealed = sub.add_parser("sealed", help="sealed commander deck tracker")
+    ssub = sealed.add_subparsers(dest="sealed_command", required=True)
+
+    sp = ssub.add_parser("summary", help="totals, by year, top decks")
+    sp.add_argument("file", help="sealed.csv")
+    sp.add_argument("--top", type=int, default=15)
+    sp.add_argument("--markdown", action="store_true")
+    sp.set_defaults(func=cmd_sealed_summary)
+
+    sp = ssub.add_parser("doctor", help="show only the rows needing attention")
+    sp.add_argument("file")
+    sp.add_argument("--fix-sets", action="store_true",
+                    help="write the Set column back for rows that resolved")
+    sp.add_argument("--all", action="store_true", help="include informational notes")
+    sp.set_defaults(func=cmd_sealed_doctor)
+
+    sp = ssub.add_parser("catalog", help="browse the known commander decks")
+    sp.add_argument("--search", help="substring match on the product name")
+    sp.add_argument("--limit", type=int, default=40)
+    sp.add_argument("--markdown", action="store_true")
+    sp.set_defaults(func=cmd_sealed_catalog)
+
+    sp = ssub.add_parser("snapshot", help="save a dated copy for later comparison")
+    sp.add_argument("file")
+    sp.add_argument("--dir", default="snapshots")
+    sp.add_argument("--force", action="store_true")
+    sp.set_defaults(func=cmd_sealed_snapshot)
+
+    sp = ssub.add_parser("diff", help="compare two snapshots")
+    sp.add_argument("old")
+    sp.add_argument("new")
+    sp.set_defaults(func=cmd_sealed_diff)
+
+    sp = ssub.add_parser("ledger", help="write the insurance/tax ledger")
+    sp.add_argument("file")
+    sp.add_argument("-o", "--output", required=True)
+    sp.set_defaults(func=cmd_sealed_ledger)
+
+    sp = ssub.add_parser("template", help="write a starter sealed.csv")
+    sp.add_argument("-o", "--output", default="sealed.csv")
+    sp.add_argument("--force", action="store_true")
+    sp.set_defaults(func=cmd_sealed_template)
+
+    sp = ssub.add_parser("refresh-catalog",
+                         help="re-fetch the deck catalog from MTGJSON (networked)")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="report what would change without writing")
+    sp.set_defaults(func=cmd_sealed_refresh)
 
     p = sub.add_parser("validate", help="flag rows that need a human look")
     p.add_argument("files", nargs="+")
