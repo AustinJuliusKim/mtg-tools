@@ -101,11 +101,12 @@ Singles come from ManaBox. Sealed decks have no scanner and no buylist, so they
 get their own tracker with hand-entered prices.
 
 ```bash
-python3 -m binders sealed template -o sealed.csv   # start a list
-python3 -m binders sealed doctor   sealed.csv      # fix what didn't resolve
-python3 -m binders sealed summary  sealed.csv
-python3 -m binders sealed ledger   sealed.csv -o sealed_ledger.csv
-python3 -m binders sealed snapshot sealed.csv      # then diff two snapshots later
+python3 -m binders sealed template  -o sealed.csv   # start a list
+python3 -m binders sealed doctor    sealed.csv      # fix what didn't resolve
+python3 -m binders sealed summary   sealed.csv
+python3 -m binders sealed dashboard sealed.csv -o sealed.html --open
+python3 -m binders sealed ledger    sealed.csv -o sealed_ledger.csv
+python3 -m binders sealed snapshot  sealed.csv      # then diff two snapshots later
 ```
 
 `sealed.csv` needs only a name and a quantity to start:
@@ -160,6 +161,27 @@ Resolution reports what it can't pin rather than guessing:
 
 Unpriced rows are never counted as `$0.00`: `summary` reports the total as a
 floor and says how many decks are missing a price.
+
+### The sealed triage page
+
+`sealed dashboard` builds the same keep/sell GUI the singles get, on its own
+page. Two deliberate differences:
+
+- **No Card Kingdom rate bands.** The singles page shows cash and credit at
+  60/47/20% and 75/62/25% — those are CK's *singles buylist* rates, and sealed
+  isn't going to CK. Applying them here would print a number matching no real
+  offer, so the sell figure is market value and nothing else. Gain/loss shows
+  separately, from your own cost basis. A test asserts no cash/credit figure can
+  ever appear.
+- **Price coverage is a first-class view.** Every ManaBox single has a price;
+  sealed prices are manual, so a partial valuation is normal. The unpriced count
+  sits next to the total, one of the four charts is coverage, and the header says
+  outright that the figure is a floor.
+
+Charts: value concentration, **value by release year** (the appreciation axis —
+old precons climb, recent ones sit near release price), top decks, and priced vs
+unpriced. Each row links out to its TCGplayer page, so pricing a deck is a click
+rather than a search — the page fetches nothing, those are plain anchors.
 
 ## Library
 
