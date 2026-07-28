@@ -24,10 +24,11 @@ import os
 import sqlite3
 from typing import Any, Dict, Optional
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, request
 
-from . import bulk, importer
+from . import bulk, exporter, importer
 from . import operations as ops
+from . import sales
 from . import repo
 from .db import format_cents, transaction
 
@@ -436,3 +437,153 @@ def undo():
     except LookupError as exc:
         raise ApiError(str(exc), 409, "nothing-to-undo")
     return jsonify(_operation(operation))
+
+
+# --- sales --------------------------------------------------------------------
+
+
+@api.get("/sales/queue")
+def sales_queue():
+    """Everything marked sell. Driven by verdicts, so triage feeds this."""
+    return jsonify(sales.list_for_sale(db()))
+
+
+@api.get("/sales")
+def sales_list():
+    status = request.args.get("status")
+    try:
+        return jsonify(sales.sale_rows(db(), status))
+    except sales.SaleError as exc:
+        raise ApiError(str(exc), 400, "bad-status")
+
+
+@api.get("/sales/summary")
+def sales_summary():
+    body = sales.summary(db())
+    return jsonify({
+        **body,
+        "gross": format_cents(body["grossCents"]),
+        "costs": format_cents(body["costsCents"]),
+        "net": format_cents(body["netCents"]),
+        "realizedGain": format_cents(body["realizedGainCents"]),
+        "listed": format_cents(body["listedCents"]),
+    })
+
+
+@api.post("/sales/list")
+def sales_list_item():
+    body = _payload()
+    try:
+        with transaction(db()):
+            sale_id = sales.record_listing(
+                db(),
+                body.get("kind", ""),
+                int(body.get("id", 0)),
+                channel=body.get("channel", ""),
+                listed_cents=_cents_or_none(body.get("listed")),
+                quantity=body.get("quantity"),
+                notes=body.get("notes", ""),
+            )
+    except sales.SaleError as exc:
+        raise ApiError(str(exc), 400, "bad-listing")
+    return jsonify({"saleId": sale_id}), 201
+
+
+@api.post("/sales/<int:sale_id>/sold")
+def sales_record(sale_id: int):
+    body = _payload()
+    sold = _cents_or_none(body.get("sold"))
+    if sold is None:
+        raise ApiError("Enter what it sold for.", 400, "no-price")
+    try:
+        with transaction(db()):
+            result = sales.record_sale(
+                db(),
+                sale_id,
+                sold_cents=sold,
+                fees_cents=_cents_or_none(body.get("fees")) or 0,
+                shipping_cents=_cents_or_none(body.get("shipping")) or 0,
+                sold_at=body.get("soldAt"),
+                notes=body.get("notes"),
+            )
+    except sales.SaleError as exc:
+        raise ApiError(str(exc), 400, "bad-sale")
+    return jsonify({
+        **result,
+        "net": format_cents(result["netCents"]),
+        "realizedGain": format_cents(result["realizedGainCents"]),
+    })
+
+
+@api.post("/sales/<int:sale_id>/cancel")
+def sales_cancel(sale_id: int):
+    try:
+        with transaction(db()):
+            sales.cancel(db(), sale_id)
+    except sales.SaleError as exc:
+        raise ApiError(str(exc), 400, "bad-cancel")
+    return jsonify({"cancelled": sale_id})
+
+
+def _cents_or_none(value):
+    """Dollars in, integer cents out. Rejects nonsense rather than coercing."""
+    if value in (None, ""):
+        return None
+    try:
+        from .db import to_cents
+
+        return to_cents(str(value))
+    except Exception:
+        raise ApiError(f"{value!r} is not an amount.", 400, "bad-amount")
+
+
+# --- export -------------------------------------------------------------------
+#
+# The database is the system of record now, which created a lock-in the CSV
+# workflow never had. Getting everything back out is a feature, not a nicety.
+
+
+@api.get("/export/manifest")
+def export_manifest():
+    import json as _json
+
+    return jsonify({
+        "tables": exporter.table_names(db()),
+        **_json.loads(exporter.manifest(db())),
+    })
+
+
+@api.get("/export/table/<name>")
+def export_table(name: str):
+    try:
+        body = exporter.table_csv(db(), name)
+    except ValueError as exc:
+        raise ApiError(str(exc), 404, "not-exportable")
+    return Response(
+        body,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}.csv"'},
+    )
+
+
+@api.get("/export/ledger")
+def export_ledger():
+    return Response(
+        exporter.ledger_csv(db()),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="mtg_collection_tracker.csv"'
+        },
+    )
+
+
+@api.get("/export/bundle")
+def export_bundle():
+    """Every table, the ledger, a manifest and the database itself."""
+    path = current_app.config["DATABASE"]
+    filename, blob = exporter.bundle(db(), None if path.startswith("file:") else path)
+    return Response(
+        blob,
+        mimetype="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

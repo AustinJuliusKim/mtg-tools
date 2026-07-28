@@ -18,6 +18,7 @@ import { Collection } from './routes/Collection'
 import { Imports } from './routes/Imports'
 import { Review } from './routes/Review'
 import { History } from './routes/History'
+import { ExportPanel, Sell } from './routes/Sell'
 
 /** Anything that changes data bumps this so views refetch. */
 export const useRevision = () => {
@@ -81,6 +82,7 @@ export function App() {
           {[
             ['/', 'Collection'],
             ['/imports', 'Import'],
+            ['/sell', 'Sell'],
             ['/history', 'History'],
           ].map(([to, label]) => (
             <NavLink
@@ -118,7 +120,16 @@ export function App() {
           <Route path="/" element={<Collection revision={revision} onChange={bump} />} />
           <Route path="/imports" element={<Imports onChange={bump} />} />
           <Route path="/imports/:id" element={<Review onChange={bump} />} />
-          <Route path="/history" element={<History revision={revision} />} />
+          <Route path="/sell" element={<Sell revision={revision} onChange={bump} />} />
+          <Route
+            path="/history"
+            element={
+              <>
+                <History revision={revision} />
+                <ExportPanel />
+              </>
+            }
+          />
         </Routes>
       </AppShell.Main>
     </AppShell>
