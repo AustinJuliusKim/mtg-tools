@@ -183,6 +183,69 @@ old precons climb, recent ones sit near release price), top decks, and priced vs
 unpriced. Each row links out to its TCGplayer page, so pricing a deck is a click
 rather than a search — the page fetches nothing, those are plain anchors.
 
+## The collection manager (local web app)
+
+Everything above reads files and writes files. The web app **holds state**: it
+stores the collection so imports accumulate, verdicts survive, and sales can be
+tracked over time.
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m binders serve          # http://127.0.0.1:8765
+```
+
+Drag a ManaBox CSV in (either header dialect) or a sealed list. It stages,
+shows you what's wrong, and **changes nothing until you commit**.
+
+### Undo is the backbone
+
+Every mutation — import, bulk edit, delete — writes an inverse patch in the
+*same transaction*. Undo replays it. This was built before any mutation existed,
+which is why nothing is unreversible; retrofitting it later is how half the
+operations end up one-way.
+
+It also caught a real bug immediately: the first version of import-commit
+snapshotted rows *after* updating them, so undoing a second import left
+quantities merged. Tests now pin that the holdings table is byte-identical after
+an undo.
+
+Undo works newest-first. Undoing out of order would produce a state neither you
+nor the log describes — a price edit reversed *after* a merge would restore
+prices onto rows the merge has since collapsed.
+
+### Bulk editing
+
+Checkbox column with shift-click ranges, and an explicit split between
+**"the 50 rows on this page"** and **"all 412 matching this filter"** — at
+collection scale those differ dangerously, so the UI never blurs them.
+
+The selection is resolved **server-side**: the browser sends ids or "everything
+matching this filter", never a count. A filter that changed since the page
+rendered therefore cannot silently widen the edit. Every action confirms with
+the real number, runs in one transaction, and produces one undo entry.
+
+Actions: set verdict · condition · language · price · adjust price by % ·
+delete. Percentage adjustments use exact integer cents (684¢ +5% → 718¢,
+half-up), not float.
+
+### Two properties worth keeping
+
+**`binders` stays stdlib-only.** The web app imports the library; the library
+never imports the web app. `run_tests.py` passes with nothing installed, CI runs
+it on a bare interpreter, and a test walks the AST of every `binders` module to
+prove no third-party import has crept in.
+
+**Local means local.** `serve()` binds `127.0.0.1` and *raises* on anything
+routable — there's no auth, so an unauthenticated view of the collection must
+not land on every network the laptop joins. Mutating routes carry a CSRF token,
+because a localhost app with no auth is still reachable from any page the
+browser has open.
+
+```bash
+.venv/bin/python run_webapp_tests.py    # the web suite (needs the venv)
+python3 run_tests.py                    # the library suite (needs nothing)
+```
+
 ## Library
 
 ```python

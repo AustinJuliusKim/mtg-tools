@@ -22,3 +22,10 @@ __pycache__/
 /sealed.csv
 /sealed_ledger.csv
 /snapshots/
+
+# Web app: the venv and the database. The database holds real holdings and
+# valuations, and this repo is public.
+/.venv/
+*.db
+*.db-wal
+*.db-shm

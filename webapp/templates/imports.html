@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Import{% endblock %}
+{% block body %}
+<h1 style="font-size:20px;margin:0 0 4px">Import a CSV</h1>
+<p class="muted" style="margin:0 0 16px">
+  ManaBox exports (either header dialect) and sealed lists are both recognized.
+  Nothing touches your collection until you review and commit.
+</p>
+
+<form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="toolbar">
+  <input type="hidden" name="csrf" value="{{ csrf_token }}" />
+  <input type="file" name="file" accept=".csv,text/csv" required />
+  <button class="btn btn-primary" type="submit">Upload &amp; review</button>
+</form>
+
+<div class="table-wrap">
+  <table class="triage">
+    <thead><tr>
+      <th>File</th><th>Kind</th><th>Dialect</th><th class="num">Rows</th>
+      <th>Status</th><th>When</th><th></th>
+    </tr></thead>
+    <tbody>
+      {% for i in imports %}
+      <tr>
+        <td class="name">{{ i.filename }}</td>
+        <td class="set">{{ i.kind }}</td>
+        <td class="sub">{{ i.dialect }}</td>
+        <td class="num">{{ i.row_count }}</td>
+        <td><span class="pill {{ 'sell' if i.status == 'staged' }}">{{ i.status }}</span></td>
+        <td class="sub">{{ (i.committed_at or i.created_at)[:16] }}</td>
+        <td>{% if i.status == 'staged' %}<a href="{{ url_for('review', import_id=i.id) }}">review →</a>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if not imports %}<div class="empty">No imports yet.</div>{% endif %}
+</div>
+{% endblock %}
