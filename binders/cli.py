@@ -531,6 +531,28 @@ def cmd_dashboard(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    """Boot the local collection manager.
+
+    Imported lazily: `binders` is stdlib-only, and the web app is the one part
+    of this repo with dependencies. Someone who never runs `serve` never needs
+    them installed.
+    """
+    try:
+        from webapp.app import serve
+    except ImportError:
+        print(
+            "The web app needs its dependencies:\n"
+            "    python3 -m venv .venv && .venv/bin/pip install -r requirements.txt\n"
+            "    .venv/bin/python -m binders serve",
+            file=sys.stderr,
+        )
+        return 2
+
+    serve(db_path=args.db, port=args.port, debug=args.debug)
+    return 0
+
+
 def cmd_validate(args) -> int:
     issues = []
     for path in args.files:
@@ -714,6 +736,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true",
                     help="report what would change without writing")
     sp.set_defaults(func=cmd_sealed_refresh)
+
+    p = sub.add_parser("serve", help="run the local collection manager in a browser")
+    p.add_argument("--db", help="database file (default: ~/.local/share/mtg-tools/collection.db)")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--debug", action="store_true")
+    p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("validate", help="flag rows that need a human look")
     p.add_argument("files", nargs="+")

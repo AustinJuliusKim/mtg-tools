@@ -58,3 +58,43 @@ jobs:
           python -m binders tiers tests/fixtures/sample.csv tests/fixtures/sample2.csv --markdown
           python -m binders dupes tests/fixtures/sample.csv tests/fixtures/sample2.csv --min-qty 10
           python -m binders validate tests/fixtures/sample2.csv
+
+  webapp:
+    name: webapp
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # This job DOES install, because the web layer has dependencies. The
+      # `test` job above still runs on a bare interpreter, which is what keeps
+      # the one-way dependency arrow honest: `binders` never needs any of this.
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Byte-compile
+        run: python -m compileall -q webapp tests_webapp run_webapp_tests.py
+
+      # This suite is also where the one-way dependency is enforced, and it
+      # matters that it runs *here* — in the one job that has Flask installed.
+      # A library module that quietly imported Flask would still pass the `test`
+      # job above, because that job never has it to import.
+      #
+      # tests_webapp/test_boundary.py does the checking: it parses every binders
+      # module's AST for third-party imports, and spawns a subprocess to confirm
+      # importing the library leaves sys.modules free of flask/werkzeug/jinja2.
+      # An earlier version of this workflow repeated that as an inline `python
+      # -c`, which YAML folded onto one line and broke; one assertion with a
+      # single home beats two copies that drift.
+      - name: Run the webapp suite
+        run: python -W error::ResourceWarning run_webapp_tests.py -v
