@@ -98,3 +98,29 @@ jobs:
       # single home beats two copies that drift.
       - name: Run the webapp suite
         run: python -W error::ResourceWarning run_webapp_tests.py -v
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned by .nvmrc so CI and the laptop agree. Node 20 went EOL in April
+      # 2026 and is below Vite's floor of ^20.19 || >=22.12.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm --prefix frontend ci
+
+      - name: Unit tests
+        # Covers the selection hook: the one place a UI bug becomes a data bug.
+        run: npm --prefix frontend test
+
+      - name: Build
+        # A broken front end should fail the PR, not the first `serve`.
+        run: npm --prefix frontend run build

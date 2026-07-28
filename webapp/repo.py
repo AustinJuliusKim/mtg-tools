@@ -160,6 +160,149 @@ def totals(conn: sqlite3.Connection, filters: Optional[Dict[str, Any]] = None) -
     }
 
 
+#: The Card Kingdom bands from `binders.aggregate.CK_TIERS`, restated in cents
+#: so the whole calculation stays integral. Floors descend; a card lands in the
+#: first band it clears.
+TIER_BANDS = (
+    ("prime", "$20+", 2000, 60, 75),
+    ("mid", "$5–$19.99", 500, 47, 62),
+    ("bulk", "Under $5", 0, 20, 25),
+)
+
+
+def tier_breakdown(
+    conn: sqlite3.Connection, filters: Optional[Dict[str, Any]] = None
+) -> List[dict]:
+    """Price bands with cash/credit estimates, integer cents throughout.
+
+    Mirrors `binders.aggregate.price_tiers`: sum the band, then apply its rate
+    once and round. Applying a rate per card and summing would round hundreds of
+    times and drift from what the CLI reports.
+    """
+    where, params = _where(filters)
+    body = _BASE.format(where=where)
+
+    case = " ".join(
+        f"WHEN COALESCE(h.price_cents, 0) >= {floor} THEN '{key}'"
+        for key, _, floor, _, _ in TIER_BANDS
+        if floor > 0
+    )
+    rows = conn.execute(
+        f"SELECT CASE {case} ELSE 'bulk' END AS band, "
+        f"SUM(h.quantity) AS qty, "
+        f"SUM(COALESCE(h.price_cents, 0) * h.quantity) AS cents "
+        f"{body} GROUP BY band",
+        params,
+    ).fetchall()
+    found = {r["band"]: r for r in rows}
+
+    out = []
+    for key, label, _floor, cash_pct, credit_pct in TIER_BANDS:
+        row = found.get(key)
+        cents_total = (row["cents"] if row else 0) or 0
+        out.append({
+            "tier": key,
+            "label": label,
+            "quantity": (row["qty"] if row else 0) or 0,
+            "marketCents": cents_total,
+            "cashCents": round(cents_total * cash_pct / 100),
+            "creditCents": round(cents_total * credit_pct / 100),
+            "cashPct": cash_pct,
+            "creditPct": credit_pct,
+        })
+    return out
+
+
+def concentration(
+    conn: sqlite3.Connection, filters: Optional[Dict[str, Any]] = None
+) -> dict:
+    """Cumulative share of value, richest row first.
+
+    Priced rows only — an unpriced row contributing zero would flatten the tail
+    and misrepresent the curve, the same reasoning the sealed dashboard uses.
+    """
+    where, params = _where(filters)
+    body = _BASE.format(where=where)
+    rows = conn.execute(
+        f"SELECT COALESCE(h.price_cents,0) * h.quantity AS cents {body} "
+        f"AND h.price_cents IS NOT NULL ORDER BY cents DESC",
+        params,
+    ).fetchall()
+
+    values = [r["cents"] for r in rows if r["cents"] > 0]
+    total = sum(values)
+    if len(values) < 2 or total <= 0:
+        return {"points": [], "marks": [], "pricedRows": len(values)}
+
+    points, marks, wanted, next_mark, running = [], [], (50, 80, 90), 0, 0
+    for index, cents_value in enumerate(values, start=1):
+        running += cents_value
+        pct = running / total * 100
+        points.append({
+            "n": index,
+            "rowPct": round(index / len(values) * 100, 2),
+            "valuePct": round(pct, 2),
+        })
+        while next_mark < len(wanted) and pct >= wanted[next_mark]:
+            marks.append({"valuePct": wanted[next_mark], "rows": index})
+            next_mark += 1
+
+    return {"points": points, "marks": marks, "pricedRows": len(values)}
+
+
+def top_sets(
+    conn: sqlite3.Connection,
+    filters: Optional[Dict[str, Any]] = None,
+    limit: int = 12,
+) -> List[dict]:
+    """Highest-value sets, with the tail folded into one bucket.
+
+    Past a dozen the bars stop being readable, and inventing a hue per set is
+    worse than an honest "Other".
+    """
+    where, params = _where(filters)
+    body = _BASE.format(where=where)
+    rows = conn.execute(
+        f"SELECT COALESCE(NULLIF(h.set_name,''), h.edition) AS name, "
+        f"SUM(h.quantity) AS qty, "
+        f"SUM(COALESCE(h.price_cents,0) * h.quantity) AS cents "
+        f"{body} GROUP BY name ORDER BY cents DESC",
+        params,
+    ).fetchall()
+
+    out = [
+        {"name": r["name"], "quantity": r["qty"], "cents": r["cents"], "other": False}
+        for r in rows[:limit]
+    ]
+    tail = rows[limit:]
+    if tail:
+        out.append({
+            "name": f"Other ({len(tail)} sets)",
+            "quantity": sum(r["qty"] for r in tail),
+            "cents": sum(r["cents"] for r in tail),
+            "other": True,
+        })
+    return out
+
+
+def rarity_split(
+    conn: sqlite3.Connection, filters: Optional[Dict[str, Any]] = None
+) -> List[dict]:
+    where, params = _where(filters)
+    body = _BASE.format(where=where)
+    order = {"mythic": 0, "rare": 1, "uncommon": 2, "common": 3}
+    rows = conn.execute(
+        f"SELECT COALESCE(NULLIF(h.rarity,''), 'unknown') AS name, "
+        f"SUM(h.quantity) AS qty, "
+        f"SUM(COALESCE(h.price_cents,0) * h.quantity) AS cents {body} GROUP BY name",
+        params,
+    ).fetchall()
+    return sorted(
+        ({"name": r["name"], "quantity": r["qty"], "cents": r["cents"]} for r in rows),
+        key=lambda r: order.get(r["name"], 9),
+    )
+
+
 def distinct_values(conn: sqlite3.Connection, column: str) -> List[str]:
     if column not in {"edition", "rarity", "language", "condition", "set_name"}:
         raise ValueError(f"cannot enumerate {column!r}")
