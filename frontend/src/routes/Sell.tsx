@@ -21,6 +21,12 @@ import {
   type SaleRecord,
   type SalesSummary,
 } from '../api/client'
+import { useResource } from '../components/useResource'
+import {
+  Refetching,
+  StatsSkeleton,
+  TableSkeleton,
+} from '../components/Skeletons'
 
 /**
  * The sale lifecycle: listed → sold → fees → net → realized gain.
@@ -29,25 +35,30 @@ import {
  * straight into here — they are not two separate piles to keep in sync.
  */
 export function Sell({ revision, onChange }: { revision: number; onChange: () => void }) {
-  const [queue, setQueue] = useState<QueueItem[]>([])
-  const [sales, setSales] = useState<SaleRecord[]>([])
-  const [summary, setSummary] = useState<SalesSummary | null>(null)
   const [selling, setSelling] = useState<QueueItem | null>(null)
+  const [tick, setTick] = useState(0)
 
-  const load = useCallback(async () => {
-    const [q, s, sum] = await Promise.all([
-      api.salesQueue(),
-      api.sales(),
-      api.salesSummary(),
-    ])
-    setQueue(q)
-    setSales(s)
-    setSummary(sum)
-  }, [])
+  const resource = useResource<{
+    queue: QueueItem[]
+    sales: SaleRecord[]
+    summary: SalesSummary
+  }>(
+    async () => {
+      const [queue, sales, summary] = await Promise.all([
+        api.salesQueue(),
+        api.sales(),
+        api.salesSummary(),
+      ])
+      return { queue, sales, summary }
+    },
+    [revision, tick],
+  )
 
-  useEffect(() => {
-    void load().catch(() => undefined)
-  }, [load, revision])
+  const { showSkeleton, refetching } = resource
+  const queue = resource.data?.queue ?? []
+  const sales = resource.data?.sales ?? []
+  const summary = resource.data?.summary ?? null
+  const load = useCallback(() => setTick((n) => n + 1), [])
 
   const list = async (item: QueueItem) => {
     try {
@@ -72,6 +83,8 @@ export function Sell({ revision, onChange }: { revision: number; onChange: () =>
         Everything marked <b>sell</b> in the collection shows up here. Recording a
         sale removes it from the collection, so valuations stay honest afterwards.
       </Text>
+
+      {showSkeleton && <StatsSkeleton count={4} />}
 
       {summary && (
         <SimpleGrid cols={{ base: 2, sm: 4 }} mb="md">
@@ -104,6 +117,8 @@ export function Sell({ revision, onChange }: { revision: number; onChange: () =>
         Queue
       </Title>
       <Card withBorder padding={0} radius="md" mb="lg">
+        {showSkeleton ? <TableSkeleton rows={4} columns={6} /> : (
+        <Refetching active={refetching}>
         <Table>
           <Table.Thead>
             <Table.Tr>
@@ -168,12 +183,16 @@ export function Sell({ revision, onChange }: { revision: number; onChange: () =>
             Nothing marked to sell yet. Mark rows in the collection view.
           </Text>
         )}
+        </Refetching>
+        )}
       </Card>
 
       <Title order={3} fz="md" mb="xs">
         Sold
       </Title>
       <Card withBorder padding={0} radius="md">
+        {showSkeleton ? <TableSkeleton rows={3} columns={7} /> : (
+        <Refetching active={refetching}>
         <Table>
           <Table.Thead>
             <Table.Tr>
@@ -217,6 +236,8 @@ export function Sell({ revision, onChange }: { revision: number; onChange: () =>
           <Text c="dimmed" ta="center" p="xl">
             Nothing sold yet.
           </Text>
+        )}
+        </Refetching>
         )}
       </Card>
 

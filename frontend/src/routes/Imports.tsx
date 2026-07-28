@@ -1,17 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { Badge, Button, Card, Group, Table, Text, Title } from '@mantine/core'
 import { Dropzone } from '@mantine/dropzone'
 import { notifications } from '@mantine/notifications'
 import { api, ApiError, type ImportRecord } from '../api/client'
+import { useResource } from '../components/useResource'
+import { Refetching, TableSkeleton } from '../components/Skeletons'
 
 export function Imports({ onChange }: { onChange: () => void }) {
-  const [rows, setRows] = useState<ImportRecord[]>([])
   const [busy, setBusy] = useState(false)
+  const [revision, setRevision] = useState(0)
   const navigate = useNavigate()
 
-  const load = () => api.imports().then(setRows).catch(() => undefined)
-  useEffect(() => { void load() }, [])
+  const { data, showSkeleton, refetching } = useResource<ImportRecord[]>(
+    () => api.imports(),
+    [revision],
+  )
+  const rows = data ?? []
+  const load = () => setRevision((n) => n + 1)
 
   const upload = async (files: File[]) => {
     if (!files.length) return
@@ -22,6 +28,7 @@ export function Imports({ onChange }: { onChange: () => void }) {
         message: `Staged ${kind} import — nothing has changed yet.`, color: 'blue',
       })
       onChange()
+      load()
       navigate(`/imports/${importId}`)
     } catch (error) {
       notifications.show({
@@ -48,6 +55,8 @@ export function Imports({ onChange }: { onChange: () => void }) {
       </Dropzone>
 
       <Card withBorder padding={0} radius="md">
+        {showSkeleton ? <TableSkeleton rows={4} columns={6} /> : (
+        <Refetching active={refetching}>
         <Table>
           <Table.Thead>
             <Table.Tr>
@@ -85,6 +94,8 @@ export function Imports({ onChange }: { onChange: () => void }) {
           </Table.Tbody>
         </Table>
         {!rows.length && <Text c="dimmed" ta="center" p="xl">No imports yet.</Text>}
+        </Refetching>
+        )}
       </Card>
     </>
   )
