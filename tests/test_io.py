@@ -192,9 +192,41 @@ class TestRoundTrip(unittest.TestCase):
         self.assertEqual(to_row(card)["Deck"], "Miirym")
 
     def test_real_export_round_trips_if_present(self):
+        """Byte-identity is only the right assertion for a current-dialect file.
+
+        `save()` deliberately normalizes a legacy `Name,Set code,...` export to
+        the current ManaBox header — that is a documented feature, and it means
+        a legacy file cannot come back byte-identical. Asserting it anyway made
+        this test fail the moment the Desktop exports were replaced with legacy
+        ones, which is a bug in the test, not the code.
+
+        So: byte-identity when the dialect already matches, and semantic
+        round-trip either way.
+        """
         require_exports(BINDERS)
+        with open(BINDERS, "rb") as fh:
+            head = fh.readline().decode("utf-8-sig")
+        is_canonical = head.startswith("Title,")
+
         original, written = self._round_trip(BINDERS)
-        self.assertEqual(original, written)
+        if is_canonical:
+            self.assertEqual(original, written)
+        else:
+            self.assertNotEqual(original, written)
+            self.assertTrue(written.startswith(b"Title,"), "should normalize")
+
+        # The cards must survive regardless of which header they arrived in.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "again.csv")
+            first = load(BINDERS)
+            save(first, out)
+            second = load(out, source=first[0].sources[0] if first else None)
+            self.assertEqual(len(first), len(second))
+            self.assertEqual(first.total_quantity, second.total_quantity)
+            self.assertEqual(first.total_value, second.total_value)
+            self.assertEqual(
+                [c.identity for c in first], [c.identity for c in second]
+            )
 
 
 class TestLoadMany(unittest.TestCase):

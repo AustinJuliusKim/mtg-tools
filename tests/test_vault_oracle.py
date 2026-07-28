@@ -16,12 +16,16 @@ import os
 import unittest
 from decimal import Decimal
 
+import glob
+
 from binders import diff, load, load_many, merge, multi_copies, price_tiers, summarize
 from tests.support import (
     BINDERS,
     BINDERS2,
     BINDERS2_BAK,
     BINDERS_BAK,
+    DESKTOP,
+    EXPORTS_MISSING,
     require_exports as _require,
 )
 
@@ -165,47 +169,98 @@ class TestLegacyDialect(unittest.TestCase):
 
 
 class TestCurrentExports(unittest.TestCase):
-    """Today's files, after the manual prune."""
+    """Whatever is on the Desktop right now.
+
+    These used to pin literal totals — 543 cards, $9,737.83 — copied from the
+    files as they stood. That went stale the moment more binders were scanned,
+    and re-pinning the new numbers would be circular: asserting that the code
+    computes what the code computed.
+
+    The hand-built vault table in `TestVaultTable` was a real oracle because a
+    human produced it independently. These files have no such counterpart, so
+    what is worth asserting here is **invariants** — properties that must hold
+    for any set of exports, on any scanning day.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.paths = sorted(glob.glob(os.path.join(DESKTOP, "Binders*.csv")))
+        if not cls.paths:
+            raise unittest.SkipTest(f"{EXPORTS_MISSING}: no Binders*.csv on the Desktop")
 
     def setUp(self):
-        _require(BINDERS, BINDERS2)
-        self.raw = load_many(BINDERS, BINDERS2)
+        self.raw = load_many(*self.paths)
         self.merged = merge(self.raw)
 
-    def test_raw_totals(self):
-        self.assertEqual(len(self.raw), 415)
-        self.assertEqual(self.raw.total_quantity, 543)
-        self.assertEqual(self.raw.total_value, Decimal("9737.83"))
+    def test_every_row_parses_with_a_title(self):
+        """The legacy-dialect trap: a header this code didn't recognize once
+        produced rows with empty titles instead of failing."""
+        self.assertTrue(self.raw)
+        for card in self.raw:
+            self.assertTrue(card.title, f"empty title from {card.sources}")
 
-    def test_per_file_totals(self):
-        self.assertEqual(load(BINDERS).total_value, Decimal("2748.08"))
-        self.assertEqual(load(BINDERS2).total_value, Decimal("6989.75"))
+    def test_per_file_totals_sum_to_the_combined_total(self):
+        parts = sum((load(p).total_value for p in self.paths), Decimal("0"))
+        self.assertEqual(parts, self.raw.total_value)
 
-    def test_merge_collapses_the_five_shared_cards(self):
-        self.assertEqual(len(self.merged), 410)
-        self.assertEqual(self.merged.total_quantity, 543)
-        shared = [c for c in self.merged if len(c.sources) > 1]
-        self.assertEqual(len(shared), 5)
-
-    def test_merged_value_uses_the_later_scan(self):
-        # The five shared cards were rescanned a week later at slightly
-        # different prices, so the merged total is not the raw total.
-        self.assertEqual(self.merged.total_value, Decimal("9735.73"))
-
-    def test_a_shared_card_can_cross_a_tier_boundary(self):
-        card = next(c for c in self.merged if c.title == "Black Market Connections")
-        self.assertEqual(card.market_price, Decimal("19.7"))  # was 20.23 in June
-        self.assertEqual(card.tier, "mid")
-
-    def test_no_rows_are_lost_or_duplicated_by_merging(self):
+    def test_merging_preserves_every_card(self):
         self.assertEqual(self.merged.total_quantity, self.raw.total_quantity)
+        self.assertLessEqual(len(self.merged), len(self.raw))
+
+    def test_merged_identities_are_unique(self):
         self.assertEqual(len({c.identity for c in self.merged}), len(self.merged))
 
-    def test_language_flag_is_the_only_validation_issue(self):
+    def test_merged_value_differs_from_raw_only_via_shared_cards(self):
+        """Merging is value-neutral unless two files priced the same card
+        differently — the only mechanism by which the totals may diverge."""
+        shared = [c for c in self.merged if len(c.sources) > 1]
+        if not shared:
+            self.assertEqual(self.merged.total_value, self.raw.total_value)
+        else:
+            self.assertNotEqual(self.merged.total_value, self.raw.total_value)
+
+    def test_a_shared_card_takes_the_most_recent_price(self):
+        """Pins the merge rule itself rather than one card's price.
+
+        The old version asserted Black Market Connections was $19.70. That was
+        true of one export on one day; the rule is what needs protecting.
+        """
+        by_identity = {}
+        for card in self.raw:
+            by_identity.setdefault(card.identity, []).append(card)
+        contested = [
+            group
+            for group in by_identity.values()
+            if len(group) > 1 and len({c.market_price for c in group}) > 1
+        ]
+        if not contested:
+            self.skipTest(EXPORTS_MISSING + ": no card is priced differently in two files")
+
+        for group in contested:
+            newest = max(group, key=lambda c: c.added)
+            merged = next(c for c in self.merged if c.identity == newest.identity)
+            with self.subTest(card=newest.title):
+                self.assertEqual(merged.market_price, newest.market_price)
+
+    def test_tiers_partition_the_collection(self):
+        rows = price_tiers(self.merged)
+        self.assertEqual(
+            sum(r.quantity for r in rows.values()), self.merged.total_quantity
+        )
+        self.assertEqual(
+            sum(r.market_value for r in rows.values()), self.merged.total_value
+        )
+
+    def test_collector_numbers_stay_strings(self):
+        """Real exports contain 140★, 35s, KLD-112 — ints would lose them."""
+        for card in self.raw:
+            self.assertIsInstance(card.collector_number, str)
+
+    def test_validation_reports_only_advisory_issues(self):
         from binders import validate
 
-        issues = validate(self.raw)
-        self.assertEqual([i.code for i in issues], ["language"])
+        errors = [i for i in validate(self.raw) if i.level == "error"]
+        self.assertEqual(errors, [], f"blocking issues in the real exports: {errors}")
 
 
 class TestPruneDiff(unittest.TestCase):
