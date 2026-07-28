@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -24,6 +25,8 @@ __all__ = [
     "SCHEMA_PATH",
     "DEFAULT_DB",
     "connect",
+    "memory_uri",
+    "is_memory",
     "init_db",
     "transaction",
     "now",
@@ -101,16 +104,37 @@ def money_columns(conn: sqlite3.Connection) -> list:
 # --- connection --------------------------------------------------------------
 
 
+def memory_uri(name: Optional[str] = None) -> str:
+    """A private in-memory database that several connections can share.
+
+    A plain `:memory:` database belongs to the single connection that opened it,
+    so a second connection sees an empty one. The app opens a connection per
+    thread, so tests have to use a shared-cache URI or they would exercise a
+    different code path than the running server — which is exactly how a
+    thread-affinity bug reached a live server with 53 tests passing.
+    """
+    return f"file:{name or 'mtg-' + secrets.token_hex(8)}?mode=memory&cache=shared"
+
+
+def is_memory(path: str) -> bool:
+    return path == ":memory:" or "mode=memory" in path
+
+
 def connect(path: Optional[str] = None) -> sqlite3.Connection:
+    """Open one connection. The app opens one per thread; see `webapp.app.db`."""
     target = path or DEFAULT_DB
-    if target != ":memory:":
+    uri = target.startswith("file:")
+
+    if not uri and not is_memory(target):
         os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
 
-    conn = sqlite3.connect(target, isolation_level=None)  # explicit transactions
+    conn = sqlite3.connect(target, isolation_level=None, uri=uri)  # explicit txns
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
-    if target != ":memory:":
+    if not is_memory(target):
+        # WAL is what makes per-thread connections workable: concurrent readers
+        # alongside one writer, with BEGIN IMMEDIATE serializing the writes.
         conn.execute("PRAGMA journal_mode = WAL")
     return conn
 

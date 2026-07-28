@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import secrets
 import sqlite3
+import threading
 from typing import Any, Dict, Optional
 
 from flask import (
@@ -27,7 +28,15 @@ from flask import (
 from . import bulk, importer
 from . import operations as ops
 from . import repo
-from .db import DEFAULT_DB, connect, format_cents, init_db, transaction
+from .db import (
+    DEFAULT_DB,
+    connect,
+    format_cents,
+    init_db,
+    is_memory,
+    memory_uri,
+    transaction,
+)
 
 __all__ = ["create_app", "serve"]
 
@@ -45,22 +54,41 @@ def create_app(db_path: Optional[str] = None, *, testing: bool = False) -> Flask
         SESSION_COOKIE_HTTPONLY=True,
     )
 
-    # A single shared connection for a single-user local app. `check_same_thread`
-    # is off because Flask's dev server threads requests; writes are serialized
-    # by BEGIN IMMEDIATE plus busy_timeout.
-    shared = connect(app.config["DATABASE"])
-    shared.execute("PRAGMA foreign_keys = ON")
-    init_db(shared)
-    app.config["_CONN"] = shared
+    # One connection PER THREAD. A single connection shared across threads
+    # raises sqlite3.ProgrammingError on the first request the dev server
+    # handles off the main thread — which happens in every real run and never
+    # under a test client, so the suite passed while the server 500'd on
+    # every page.
+    #
+    # An in-memory database must become a shared-cache URI for this to work: a
+    # plain `:memory:` belongs to the connection that opened it, so each thread
+    # would otherwise get its own empty database. Keeping one code path for
+    # memory and file is the point — the divergence is what hid the bug.
+    if is_memory(app.config["DATABASE"]):
+        app.config["DATABASE"] = memory_uri()
+
+    app.config["_LOCAL"] = threading.local()
+
+    # An anchor connection kept for the app's lifetime. For a shared-cache
+    # memory database this is load-bearing: the database is destroyed when the
+    # last connection to it closes.
+    app.config["_ANCHOR"] = connect(app.config["DATABASE"])
+    init_db(app.config["_ANCHOR"])
 
     _register(app)
     return app
 
 
 def db() -> sqlite3.Connection:
+    """This thread's connection, opened on first use."""
     from flask import current_app
 
-    return current_app.config["_CONN"]
+    store = current_app.config["_LOCAL"]
+    conn = getattr(store, "conn", None)
+    if conn is None:
+        conn = connect(current_app.config["DATABASE"])
+        store.conn = conn
+    return conn
 
 
 # --- CSRF ---------------------------------------------------------------------
