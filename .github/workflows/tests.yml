@@ -124,3 +124,72 @@ jobs:
       - name: Build
         # A broken front end should fail the PR, not the first `serve`.
         run: npm --prefix frontend run build
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      # Both halves, because this job runs the *whole* app: Flask serving the
+      # real build, driven through a real browser. That combination is the
+      # point — the unit suites have twice been green while the app was broken,
+      # and both times a browser against a live server would have caught it.
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Install Node deps
+        run: npm --prefix frontend ci
+
+      # ~90s of download otherwise, on every run. Keyed by the Playwright
+      # version so a bump fetches the matching browser instead of reusing a
+      # stale one.
+      - name: Resolve the Playwright version
+        id: pw
+        run: |
+          echo "version=$(node -p "require('./frontend/node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Chromium
+        # `--with-deps` needs root and installs system libraries, so it runs
+        # even on a cache hit — the cache holds the browser, not the libs.
+        run: npx --prefix frontend playwright install --with-deps chromium
+
+      - name: Build the front end
+        # The server serves `frontend/dist`, so the tests exercise what ships
+        # rather than a dev-server approximation.
+        run: npm --prefix frontend run build
+
+      - name: Run the end-to-end suite
+        working-directory: frontend
+        env:
+          # CI installs into the job's own environment; there is no venv here.
+          E2E_PYTHON: python
+        run: npx playwright test
+
+      - name: Upload the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7

@@ -412,15 +412,19 @@ function BuylistPanel({ revision }: { revision: number }) {
             )}
           </Text>
         </div>
-        <Button
-          component="a"
-          href="/api/export/buylist"
-          download
-          variant="default"
-          disabled={summary === null || empty}
-        >
-          Buylist CSV
-        </Button>
+        {/* A `disabled` anchor is not disabled — it still navigates, and only
+            looks inert because of styling. With nothing marked sell that means
+            downloading a lone header row. So render a real button when there
+            is nothing to fetch, and a link only when there is. */}
+        {summary === null || empty ? (
+          <Button variant="default" disabled>
+            Buylist CSV
+          </Button>
+        ) : (
+          <Button component="a" href="/api/export/buylist" download variant="default">
+            Buylist CSV
+          </Button>
+        )}
       </Group>
       {summary !== null && !empty && (
         <Text c="dimmed" fz="xs" mt="sm">

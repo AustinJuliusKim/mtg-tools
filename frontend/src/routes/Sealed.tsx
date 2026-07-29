@@ -530,6 +530,7 @@ function BulkBar({
               <TextInput
                 size="xs"
                 w={130}
+                aria-label="Bulk action value"
                 placeholder={action === 'adjust_price' ? 'e.g. -10' : 'value'}
                 value={value}
                 onChange={(e) => setValue(e.currentTarget.value)}
