@@ -109,6 +109,9 @@ python3 -m binders sealed ledger    sealed.csv -o sealed_ledger.csv
 python3 -m binders sealed snapshot  sealed.csv      # then diff two snapshots later
 ```
 
+The web app serves the same starter file from its Sealed screen, and imports
+sealed lists directly — the CLI is no longer the only way in.
+
 `sealed.csv` needs only a name and a quantity to start:
 
 ```
@@ -199,6 +202,67 @@ npm --prefix frontend run build
 Developing the UI? `npm --prefix frontend run dev` serves it on :5173 and
 proxies `/api` to Flask, so the browser sees one origin.
 
+### The two halves reload differently — and that will bite you
+
+This is worth reading once, because the failure mode looks like a bug in the
+app rather than a stale process.
+
+| | How it picks up a change |
+|---|---|
+| `frontend/dist` | **Immediately.** Flask reads the file off disk per request, so a `vite build` in another terminal changes what the browser gets on the next reload. |
+| `webapp/*.py` | **Never, until you restart.** `serve()` runs with Werkzeug's reloader off, so the Python is loaded once at startup. |
+
+So a long-running `serve` will happily hand the browser a front end built an
+hour later than itself. The new UI calls routes the old process has never heard
+of, and you get:
+
+```json
+{"error": "No such endpoint.", "code": "not-found"}
+```
+
+Which is true, and completely misleading. **Restart the server after touching
+anything under `webapp/`.**
+
+Werkzeug does have a reloader — `--debug` turns it on. Be aware that `debug`
+bundles two things: the reloader *and* the interactive debugger, a
+browser-reachable Python console on error pages. On an app that deliberately
+ships no authentication, that is a real surface to open for a convenience. They
+are separable if you want only the reload:
+
+```python
+app.run(host=host, port=port, use_reloader=True, use_debugger=False)
+```
+
+One caveat if you do: the reloader restarts by re-executing the original
+command line, so it needs a real entry point. `python -m binders serve` is
+fine; `python -c '...'` dies with `can't open file '.../-c'`.
+
+The reloader watches Python only — it will never rebuild the front end. The
+full loop is both processes: `npm run dev` for the UI, and a Flask restart for
+the API.
+
+### What the screens are
+
+| Screen | What it's for |
+|---|---|
+| Collection | The singles. Filters, charts, bulk edits, verdicts. |
+| Sealed | Commander decks. Same surface, no CK rate bands — see below. |
+| Import | Upload a CSV, review what it staged, commit or discard. |
+| Sell | The queue verdicts feed, sale records, and the **Card Kingdom submission list**. |
+| History | Every operation, newest-first, with undo. |
+
+The **buylist export** (`GET /api/export/buylist`) writes the same columns and
+the same rate bands as `binders buylist`, so the CLI and the app can't quote
+different estimates for one card. What the app adds is the verdict: it exports
+what you marked *sell*, not everything over a price. Sealed never appears on it
+— those are CK's singles rates — and anything already listed or sold is skipped
+so one card can't be shipped twice. Sub-$1 is dropped by default
+(`?min_price=`), because a vendor pays close to nothing for them.
+
+The Sealed screen also hands out a starter `sealed.csv` — the same bytes
+`binders sealed template` writes, from one function, so the file you download
+can't disagree with the parser that reads it back.
+
 ### Undo is the backbone
 
 Every mutation — import, bulk edit, delete — writes an inverse patch in the
@@ -249,6 +313,14 @@ wire, preformatted strings for display. The client does no money arithmetic.
 **Local means local.** `serve()` binds `127.0.0.1` and *raises* on anything
 routable. Mutations require an `X-CSRF-Token` header — a cross-origin form post
 cannot set a custom header, which is the part that actually stops CSRF.
+
+That last one is a design decision, not a stub: there is **no authentication of
+any kind**, so the loopback bind is the whole access control. Anything that
+makes this reachable from elsewhere has to supply identity *in front of it* — a
+tunnel with an access policy, or a VPN — rather than by handing the process a
+different bind address. It also means the SQLite file is the system of record
+and expects a single writer on a persistent disk, which rules out the
+scale-to-zero hosts whose filesystems reset.
 
 ```bash
 python3 run_tests.py                    # library, needs nothing
