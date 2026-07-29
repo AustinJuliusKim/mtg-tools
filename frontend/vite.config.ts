@@ -14,5 +14,10 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test-setup.ts',
+    // Scoped to `src`, because Vitest's default glob also sweeps up
+    // `e2e/*.spec.ts` — and Playwright specs loaded by Vitest fail with
+    // "Playwright Test did not expect test.describe() to be called here."
+    // The two runners share a filename convention and must not share files.
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
 })

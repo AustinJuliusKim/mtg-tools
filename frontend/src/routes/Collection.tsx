@@ -401,6 +401,10 @@ function BulkBar({
             <Select
               size="xs"
               w={160}
+              // Labelled because it had no accessible name at all: a bare
+              // combobox a screen reader announces as nothing, and the control
+              // that decides what a bulk edit *does*.
+              aria-label="Bulk action"
               data={actions.map((a) => ({ value: a.key, label: a.label }))}
               value={action}
               onChange={setAction}
@@ -409,6 +413,7 @@ function BulkBar({
               <TextInput
                 size="xs"
                 w={130}
+                aria-label="Bulk action value"
                 placeholder={action === 'adjust_price' ? 'e.g. -10' : 'value'}
                 value={value}
                 onChange={(e) => setValue(e.currentTarget.value)}

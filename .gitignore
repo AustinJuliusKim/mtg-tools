@@ -34,3 +34,11 @@ __pycache__/
 node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
+
+# Playwright: the scratch database the e2e server runs against, plus its
+# artifacts. The database is deleted and recreated on every run.
+/frontend/e2e/.tmp/
+/frontend/test-results/
+/frontend/playwright-report/
+/frontend/blob-report/
+/frontend/.playwright/
