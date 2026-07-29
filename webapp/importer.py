@@ -19,7 +19,8 @@ from binders.catalog import load_catalog
 from binders.io import MANABOX_COLUMNS, canonical_header, parse_row, validate
 from binders.model import Card
 from binders.sealed import SEALED_COLUMNS, SealedHolding, resolve
-from binders.sealed import load_sealed as _load_sealed
+from binders.sealed import _parse_date as _parse_sealed_date
+from binders.sealed import _parse_money as _parse_sealed_money
 
 from . import operations as ops
 from .db import now, to_cents
@@ -161,6 +162,15 @@ def _stage_sealed(rows: Sequence[dict]) -> List[dict]:
             set_hint=(row.get("Set") or "").strip(),
             quantity=int(qty) if qty.lstrip("-").isdigit() else 1,
             condition=((row.get("Condition") or "sealed").strip().lower() or "sealed"),
+            # The money columns. An earlier version read only name, set,
+            # quantity and condition, so every sealed import silently dropped
+            # its prices — invisible until sealed rows became viewable at all.
+            # Parsed with the library's own helpers so the web app and the CLI
+            # read a sealed.csv identically.
+            price=_parse_sealed_money(row.get("Price")),
+            price_date=_parse_sealed_date(row.get("Price date")),
+            source=(row.get("Source") or "").strip(),
+            cost_basis=_parse_sealed_money(row.get("Cost basis")),
             notes=(row.get("Notes") or "").strip(),
             line=index,
         ))

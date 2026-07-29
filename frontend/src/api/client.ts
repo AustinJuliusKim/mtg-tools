@@ -81,6 +81,62 @@ export interface Insights {
   totals: Totals
 }
 
+export interface SealedRow {
+  id: number
+  name: string
+  rawName: string
+  setCode: string
+  setName: string
+  year: string
+  quantity: number
+  priceCents: number | null
+  totalCents: number | null
+  price: string
+  total: string
+  costBasisCents: number | null
+  costBasis: string
+  gainCents: number | null
+  gain: string
+  priceDate: string | null
+  priceSource: string
+  condition: string
+  resolved: boolean
+  purchaseUrl: string
+  notes: string
+  verdict: 'keep' | 'sell' | 'undecided'
+}
+
+export interface SealedTotals extends Totals {
+  unresolved: number
+  costCents: number
+  cost: string
+}
+
+export interface SealedPage {
+  rows: SealedRow[]
+  page: number
+  perPage: number
+  pages: number
+  totalRows: number
+  sort: string
+  direction: 'asc' | 'desc'
+  totals: SealedTotals
+  grandTotals: SealedTotals
+  facets: { sets: string[]; years: string[]; conditions: string[] }
+}
+
+export interface SealedInsights {
+  byYear: {
+    year: string
+    quantity: number
+    cents: number
+    value: string
+    unpriced: number
+  }[]
+  coverage: { priced: number; unpriced: number; pricedCents: number }
+  totals: SealedTotals
+}
+
 export interface Operation {
   id: number
   kind: string
@@ -171,6 +227,8 @@ export interface Selection {
   ids?: number[]
   selectAll?: boolean
   filters?: Filters
+  /** Which table the selection is over. The server re-resolves against it. */
+  kind?: 'holding' | 'sealed'
 }
 
 export class ApiError extends Error {
@@ -235,7 +293,14 @@ export const api = {
   insights: (filters: Filters) =>
     request<Insights>(`/api/collection/insights${query(filters)}`),
 
-  bulkActions: () => request<BulkAction[]>('/api/bulk/actions'),
+  sealed: (filters: Filters, opts: Filters = {}) =>
+    request<SealedPage>(`/api/sealed${query(filters, opts)}`),
+
+  sealedInsights: (filters: Filters) =>
+    request<SealedInsights>(`/api/sealed/insights${query(filters)}`),
+
+  bulkActions: (kind = 'holding') =>
+    request<BulkAction[]>(`/api/bulk/actions?kind=${kind}`),
 
   bulkPreview: (selection: Selection) =>
     request<{

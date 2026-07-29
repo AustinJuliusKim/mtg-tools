@@ -11,7 +11,19 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-__all__ = ["FILTERS", "SORTS", "Page", "query_holdings", "totals", "distinct_values"]
+__all__ = [
+    "FILTERS",
+    "SORTS",
+    "SEALED_FILTERS",
+    "SEALED_SORTS",
+    "SUBJECTS",
+    "Page",
+    "query_holdings",
+    "query_sealed",
+    "totals",
+    "sealed_totals",
+    "distinct_values",
+]
 
 #: keyword -> (SQL fragment, value transform). Names match binders.filters.
 #: Fragments are written table-qualified up front. An earlier version qualified
@@ -104,6 +116,169 @@ FROM holdings h
 LEFT JOIN verdicts v ON v.subject_kind = 'holding' AND v.subject_id = h.id
 WHERE {where}
 """
+
+# --- sealed ------------------------------------------------------------------
+#
+# Sealed products were importable but unreachable: rows landed in the table and
+# no query, route or view could see them again. These give sealed the same
+# treatment singles get, with the fields that actually differ — a release year
+# and a cost basis instead of rarity and foil.
+
+SEALED_FILTERS = {
+    "price_min": ("s.price_cents >= ?", lambda v: int(round(float(v) * 100))),
+    "price_max": ("s.price_cents <= ?", lambda v: int(round(float(v) * 100))),
+    "qty_min": ("s.quantity >= ?", int),
+    "set_code": ("s.set_code = ?", str),
+    "year": ("s.release_year = ?", str),
+    "condition": ("s.condition = ?", str),
+    "unpriced": ("s.price_cents IS NULL", None),
+    "unresolved": ("s.resolved = 0", None),
+    "name_contains": (
+        "(LOWER(s.product_name) LIKE ? OR LOWER(s.raw_name) LIKE ?)",
+        lambda v: f"%{str(v).lower()}%",
+    ),
+    "verdict": ("COALESCE(v.verdict, 'undecided') = ?", str),
+}
+
+SEALED_SORTS = {
+    "name": "COALESCE(NULLIF(s.product_name,''), s.raw_name) COLLATE NOCASE",
+    "set": "s.set_code COLLATE NOCASE",
+    "year": "s.release_year",
+    "quantity": "s.quantity",
+    "price": "s.price_cents",
+    "total": "(COALESCE(s.price_cents, 0) * s.quantity)",
+    "updated": "s.updated_at",
+}
+
+_SEALED_BASE = """
+FROM sealed s
+LEFT JOIN verdicts v ON v.subject_kind = 'sealed' AND v.subject_id = s.id
+WHERE {where}
+"""
+
+
+def _sealed_where(filters):
+    clauses, params = [], []
+    for key, value in (filters or {}).items():
+        if value in (None, ""):
+            continue
+        if key not in SEALED_FILTERS:
+            raise ValueError(f"unknown filter {key!r}")
+        fragment, transform = SEALED_FILTERS[key]
+        clauses.append(fragment)
+        if transform is not None:
+            # name_contains binds the same value twice (product and raw name).
+            params.extend([transform(value)] * fragment.count("?"))
+    return (" AND ".join(clauses) if clauses else "1=1"), params
+
+
+def query_sealed(
+    conn: sqlite3.Connection,
+    filters: Optional[Dict[str, Any]] = None,
+    *,
+    sort: str = "total",
+    direction: str = "desc",
+    page: int = 1,
+    per_page: int = 50,
+) -> Page:
+    where, params = _sealed_where(filters)
+    order = SEALED_SORTS.get(sort, SEALED_SORTS["total"])
+    direction = "ASC" if str(direction).lower() == "asc" else "DESC"
+    page = max(1, int(page))
+    per_page = max(1, min(500, int(per_page)))
+
+    body = _SEALED_BASE.format(where=where)
+    total = conn.execute(f"SELECT COUNT(*) AS n {body}", params).fetchone()["n"]
+    rows = conn.execute(
+        f"SELECT s.*, COALESCE(v.verdict, 'undecided') AS verdict "
+        f"{body} ORDER BY {order} {direction}, s.id ASC LIMIT ? OFFSET ?",
+        params + [per_page, (page - 1) * per_page],
+    ).fetchall()
+    return Page(rows, total, page, per_page, sort, direction.lower())
+
+
+def sealed_matching_ids(
+    conn: sqlite3.Connection, filters: Optional[Dict[str, Any]] = None
+) -> List[int]:
+    where, params = _sealed_where(filters)
+    body = _SEALED_BASE.format(where=where)
+    return [r["id"] for r in conn.execute(f"SELECT s.id {body}", params).fetchall()]
+
+
+def sealed_totals(
+    conn: sqlite3.Connection, filters: Optional[Dict[str, Any]] = None
+) -> dict:
+    where, params = _sealed_where(filters)
+    body = _SEALED_BASE.format(where=where)
+    row = conn.execute(
+        f"SELECT COUNT(*) AS rows, "
+        f"COALESCE(SUM(s.quantity), 0) AS quantity, "
+        f"COALESCE(SUM(COALESCE(s.price_cents, 0) * s.quantity), 0) AS value_cents, "
+        f"SUM(CASE WHEN s.price_cents IS NULL THEN s.quantity ELSE 0 END) AS unpriced, "
+        f"COALESCE(SUM(COALESCE(s.cost_basis_cents, 0) * s.quantity), 0) AS cost_cents, "
+        f"SUM(CASE WHEN s.resolved = 0 THEN 1 ELSE 0 END) AS unresolved "
+        f"{body}",
+        params,
+    ).fetchone()
+    return {
+        "rows": row["rows"],
+        "quantity": row["quantity"],
+        "value_cents": row["value_cents"],
+        "unpriced": row["unpriced"] or 0,
+        "cost_cents": row["cost_cents"],
+        "unresolved": row["unresolved"] or 0,
+    }
+
+
+def sealed_by_year(
+    conn: sqlite3.Connection, filters: Optional[Dict[str, Any]] = None
+) -> List[dict]:
+    """Value by release year — the appreciation axis for sealed product.
+
+    Chronological, not sorted by value: the shape of the series is the finding
+    (older precons climb, recent ones sit near release price).
+    """
+    where, params = _sealed_where(filters)
+    body = _SEALED_BASE.format(where=where)
+    rows = conn.execute(
+        f"SELECT COALESCE(NULLIF(s.release_year,''), '—') AS year, "
+        f"SUM(s.quantity) AS qty, "
+        f"SUM(COALESCE(s.price_cents,0) * s.quantity) AS cents, "
+        f"SUM(CASE WHEN s.price_cents IS NULL THEN s.quantity ELSE 0 END) AS unpriced "
+        f"{body} GROUP BY year ORDER BY year",
+        params,
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def sealed_distinct(conn: sqlite3.Connection, column: str) -> List[str]:
+    if column not in {"set_code", "release_year", "condition"}:
+        raise ValueError(f"cannot enumerate {column!r}")
+    rows = conn.execute(
+        f"SELECT DISTINCT {column} AS v FROM sealed WHERE {column} != '' "
+        f"ORDER BY {column} COLLATE NOCASE"
+    ).fetchall()
+    return [r["v"] for r in rows]
+
+
+#: What each subject kind is called in SQL and in the verdicts table. Bulk
+#: actions consult this rather than hardcoding `holdings`.
+SUBJECTS = {
+    "holding": {
+        "table": "holdings",
+        "filters": FILTERS,
+        "matching_ids": lambda conn, f: matching_ids(conn, f),
+        "name_sql": "title",
+        "extra_name_sql": "edition",
+    },
+    "sealed": {
+        "table": "sealed",
+        "filters": SEALED_FILTERS,
+        "matching_ids": lambda conn, f: sealed_matching_ids(conn, f),
+        "name_sql": "COALESCE(NULLIF(product_name,''), raw_name)",
+        "extra_name_sql": "set_code",
+    },
+}
 
 
 def query_holdings(

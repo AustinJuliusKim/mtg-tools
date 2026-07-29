@@ -215,11 +215,155 @@ def insights():
     })
 
 
+# --- sealed -------------------------------------------------------------------
+#
+# Sealed rows were importable but unreachable: they landed in the table and
+# nothing could query, show or edit them again. The import screen even
+# advertised that it accepted sealed lists. These give sealed the same surface
+# singles have.
+
+
+def _sealed_filters(source) -> Dict[str, Any]:
+    unknown = [
+        key
+        for key in source.keys()
+        if key not in repo.SEALED_FILTERS and key not in NON_FILTER_PARAMS
+    ]
+    if unknown:
+        known = ", ".join(sorted(repo.SEALED_FILTERS))
+        raise ApiError(
+            f"Unknown filter(s): {', '.join(sorted(unknown))}. Available: {known}",
+            400,
+            "bad-filter",
+        )
+    return {
+        key: source.get(key)
+        for key in repo.SEALED_FILTERS
+        if source.get(key) not in (None, "", [])
+    }
+
+
+def _sealed_row(row) -> dict:
+    price = row["price_cents"]
+    total = price * row["quantity"] if price is not None else None
+    basis = row["cost_basis_cents"]
+    cost = basis * row["quantity"] if basis is not None else None
+    # Gain stays null without a basis — never zero. A fabricated basis lands
+    # straight in a tax figure.
+    gain = None if (cost is None or total is None) else total - cost
+    return {
+        "id": row["id"],
+        "name": row["product_name"] or row["raw_name"],
+        "rawName": row["raw_name"],
+        "setCode": row["set_code"],
+        "setName": row["set_name"],
+        "year": row["release_year"],
+        "quantity": row["quantity"],
+        "priceCents": price,
+        "totalCents": total,
+        "price": format_cents(price),
+        "total": format_cents(total),
+        "costBasisCents": cost,
+        "costBasis": format_cents(cost),
+        "gainCents": gain,
+        "gain": format_cents(gain),
+        "priceDate": row["price_date"],
+        "priceSource": row["price_source"],
+        "condition": row["condition"],
+        "resolved": bool(row["resolved"]),
+        "purchaseUrl": row["purchase_url"],
+        "notes": row["notes"],
+        "verdict": row["verdict"],
+    }
+
+
+def _sealed_totals(t: dict) -> dict:
+    return {
+        "rows": t["rows"],
+        "quantity": t["quantity"],
+        "valueCents": t["value_cents"],
+        "value": format_cents(t["value_cents"]),
+        "unpriced": t["unpriced"],
+        "unresolved": t["unresolved"],
+        "costCents": t["cost_cents"],
+        "cost": format_cents(t["cost_cents"]),
+    }
+
+
+@api.get("/sealed")
+def sealed_collection():
+    filters = _sealed_filters(request.args)
+    try:
+        page = repo.query_sealed(
+            db(),
+            filters,
+            sort=request.args.get("sort", "total"),
+            direction=request.args.get("dir", "desc"),
+            page=int(request.args.get("page", 1) or 1),
+            per_page=int(request.args.get("perPage", 50) or 50),
+        )
+    except ValueError as exc:
+        raise ApiError(str(exc), 400, "bad-filter")
+
+    return jsonify({
+        "rows": [_sealed_row(r) for r in page.rows],
+        "page": page.page,
+        "perPage": page.per_page,
+        "pages": page.pages,
+        "totalRows": page.total_rows,
+        "sort": page.sort,
+        "direction": page.direction,
+        "totals": _sealed_totals(repo.sealed_totals(db(), filters)),
+        "grandTotals": _sealed_totals(repo.sealed_totals(db(), {})),
+        "facets": {
+            "sets": repo.sealed_distinct(db(), "set_code"),
+            "years": repo.sealed_distinct(db(), "release_year"),
+            "conditions": repo.sealed_distinct(db(), "condition"),
+        },
+    })
+
+
+@api.get("/sealed/insights")
+def sealed_insights():
+    """Deliberately not the singles chart set.
+
+    No Card Kingdom rate bands: those are CK *singles* buylist rates and sealed
+    isn't going to CK, so applying them would print a figure matching no real
+    offer. Price coverage takes their place, because with hand-entered prices a
+    partial valuation is the normal state rather than an error.
+    """
+    filters = _sealed_filters(request.args)
+    totals = repo.sealed_totals(db(), filters)
+    years = repo.sealed_by_year(db(), filters)
+
+    return jsonify({
+        "byYear": [
+            {
+                "year": y["year"],
+                "quantity": y["qty"],
+                "cents": y["cents"],
+                "value": format_cents(y["cents"]),
+                "unpriced": y["unpriced"],
+            }
+            for y in years
+        ],
+        "coverage": {
+            "priced": totals["quantity"] - totals["unpriced"],
+            "unpriced": totals["unpriced"],
+            "pricedCents": totals["value_cents"],
+        },
+        "totals": _sealed_totals(totals),
+    })
+
+
 # --- bulk ---------------------------------------------------------------------
 
 
 @api.get("/bulk/actions")
 def bulk_actions():
+    kind = request.args.get("kind", "holding")
+    if kind not in repo.SUBJECTS:
+        raise ApiError(f"{kind!r} is not a bulk subject", 400, "bad-kind")
     return jsonify([
         {
             "key": key,
@@ -227,7 +371,7 @@ def bulk_actions():
             "needsValue": spec["needs_value"],
             "destructive": bool(spec.get("destructive")),
         }
-        for key, spec in bulk.ACTIONS.items()
+        for key, spec in bulk.actions_for(kind).items()
     ])
 
 
@@ -235,17 +379,19 @@ def bulk_actions():
 def bulk_preview():
     """What the confirmation dialog shows: the real count and a real sample."""
     body = _payload()
+    kind = body.get("kind", "holding")
     try:
         target = bulk.resolve_selection(
             db(),
             ids=body.get("ids"),
-            filters=_filters(body.get("filters") or {}),
+            filters=_selection_filters(kind, body.get("filters") or {}),
             select_all=bool(body.get("selectAll")),
+            kind=kind,
         )
     except (bulk.BulkError, ValueError) as exc:
         raise ApiError(str(exc), 400, "bad-selection")
 
-    preview = bulk.preview(db(), target)
+    preview = bulk.preview(db(), target, kind=kind)
     return jsonify({
         "count": preview["count"],
         "quantity": preview["quantity"],
@@ -267,18 +413,20 @@ def bulk_preview():
 @api.post("/bulk")
 def bulk_apply():
     body = _payload()
+    kind = body.get("kind", "holding")
     try:
         # Resolved here, from ids or filters — never from a count the client
         # sent. This is the guarantee that a stale filter cannot widen an edit.
         target = bulk.resolve_selection(
             db(),
             ids=body.get("ids"),
-            filters=_filters(body.get("filters") or {}),
+            filters=_selection_filters(kind, body.get("filters") or {}),
             select_all=bool(body.get("selectAll")),
+            kind=kind,
         )
         with transaction(db()):
             result = bulk.apply_action(
-                db(), body.get("action", ""), target, body.get("value")
+                db(), body.get("action", ""), target, body.get("value"), kind=kind
             )
     except (bulk.BulkError, ValueError) as exc:
         raise ApiError(str(exc), 400, "bulk-failed")
@@ -523,6 +671,13 @@ def sales_cancel(sale_id: int):
     except sales.SaleError as exc:
         raise ApiError(str(exc), 400, "bad-cancel")
     return jsonify({"cancelled": sale_id})
+
+
+def _selection_filters(kind: str, source) -> Dict[str, Any]:
+    """Filters for whichever subject the selection is over."""
+    if kind == "sealed":
+        return _sealed_filters(source)
+    return _filters(source)
 
 
 def _cents_or_none(value):
