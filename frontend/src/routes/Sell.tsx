@@ -8,6 +8,7 @@ import {
   Modal,
   NumberInput,
   SimpleGrid,
+  Skeleton,
   Table,
   Text,
   Title,
@@ -17,6 +18,7 @@ import { notifications } from '@mantine/notifications'
 import {
   api,
   ApiError,
+  type BuylistSummary,
   type QueueItem,
   type SaleRecord,
   type SalesSummary,
@@ -186,6 +188,8 @@ export function Sell({ revision, onChange }: { revision: number; onChange: () =>
         </Refetching>
         )}
       </Card>
+
+      <BuylistPanel revision={revision} />
 
       <Title order={3} fz="md" mb="xs">
         Sold
@@ -370,6 +374,66 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 
 const money = (cents: number | null) =>
   cents === null ? '—' : `$${(cents / 100).toFixed(2)}`
+
+/**
+ * The vendor submission list.
+ *
+ * Deliberately here rather than in "Export everything": that panel is a backup,
+ * this is a step in the sell workflow. It reads from the same verdicts the
+ * queue above does, so the shipment and the queue can't disagree.
+ */
+function BuylistPanel({ revision }: { revision: number }) {
+  const [summary, setSummary] = useState<BuylistSummary | null>(null)
+
+  useEffect(() => {
+    api.buylistSummary().then(setSummary).catch(() => undefined)
+  }, [revision])
+
+  const empty = summary?.rows === 0
+
+  return (
+    <Card withBorder radius="md" mb="lg">
+      <Group justify="space-between" align="flex-start" wrap="nowrap">
+        <div>
+          <Title order={3} fz="md">
+            Card Kingdom submission list
+          </Title>
+          <Text c="dimmed" fz="sm">
+            {summary === null ? (
+              <Skeleton height={12} width={320} radius="sm" mt={6} />
+            ) : empty ? (
+              'Nothing to submit yet — mark rows sell in the collection first.'
+            ) : (
+              <>
+                {summary.rows} stacks · {summary.quantity} cards ·{' '}
+                <b>{summary.market}</b> at market, an estimated{' '}
+                <b>{summary.cash}</b> cash or <b>{summary.credit}</b> credit.
+              </>
+            )}
+          </Text>
+        </div>
+        <Button
+          component="a"
+          href="/api/export/buylist"
+          download
+          variant="default"
+          disabled={summary === null || empty}
+        >
+          Buylist CSV
+        </Button>
+      </Group>
+      {summary !== null && !empty && (
+        <Text c="dimmed" fz="xs" mt="sm">
+          Sub-$1 cards are left off — a vendor pays close to nothing for them and
+          they inflate the shipment. Cards already listed or sold are excluded so
+          nothing gets sold twice. The cash and credit figures are this project's
+          fixed rate bands, not CK's per-card offers: a planning number, not a
+          quote.
+        </Text>
+      )}
+    </Card>
+  )
+}
 
 /** Download everything. The database is canonical now; this is the way out. */
 export function ExportPanel() {

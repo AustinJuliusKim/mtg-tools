@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from flask import Blueprint, Response, current_app, jsonify, request
@@ -729,6 +730,35 @@ def export_ledger():
         headers={
             "Content-Disposition": 'attachment; filename="mtg_collection_tracker.csv"'
         },
+    )
+
+
+def _min_price_cents() -> int:
+    """`?min_price=` in dollars, defaulting to the CLI's $1 floor."""
+    raw = request.args.get("min_price")
+    if raw in (None, ""):
+        return 100
+    try:
+        value = Decimal(str(raw))
+    except (ArithmeticError, ValueError):
+        raise ApiError(f"{raw!r} isn't a price.", 400, "bad-min-price")
+    if value < 0:
+        raise ApiError("A minimum price can't be negative.", 400, "bad-min-price")
+    return int(value * 100)
+
+
+@api.get("/export/buylist/summary")
+def export_buylist_summary():
+    """What the buylist would contain, so the UI can say so before downloading."""
+    return jsonify(exporter.buylist_summary(db(), min_price_cents=_min_price_cents()))
+
+
+@api.get("/export/buylist")
+def export_buylist():
+    return Response(
+        exporter.buylist_csv(db(), min_price_cents=_min_price_cents()),
+        mimetype="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="ck_buylist.csv"'},
     )
 
 

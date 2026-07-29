@@ -137,6 +137,19 @@ export interface SealedInsights {
   totals: SealedTotals
 }
 
+/** What the CK submission list would contain, shown before it is downloaded. */
+export interface BuylistSummary {
+  rows: number
+  quantity: number
+  marketCents: number
+  market: string
+  cashCents: number
+  cash: string
+  creditCents: number
+  credit: string
+  minPriceCents: number
+}
+
 export interface Operation {
   id: number
   kind: string
@@ -400,6 +413,8 @@ export const api = {
       singles: { quantity: number; valueCents: number; value: string }
       notes: string[]
     }>('/api/export/manifest'),
+
+  buylistSummary: () => request<BuylistSummary>('/api/export/buylist/summary'),
 
   history: () => request<Operation[]>('/api/history'),
 
