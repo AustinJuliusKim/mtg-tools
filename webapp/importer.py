@@ -47,17 +47,16 @@ def detect_kind(text: str) -> Tuple[str, str]:
     understands both ManaBox header dialects — the current `Title,Edition,...`
     and the older `Name,Set code,...` in a different column order. Sealed files
     are recognized by their own header.
+
+    **The order of the two tests is load-bearing.** The formats overlap: a
+    legacy ManaBox export begins `Name,Set code,…,Quantity,…`, so it satisfies
+    any sealed test loose enough to accept a hand-written deck list. Asking the
+    strict question first — six or more columns mapping onto ManaBox's schema —
+    is what lets the second one be as loose as its own error message promises.
     """
     header = _sniff(text)
     if not header:
         raise DetectionError("The file is empty.")
-
-    lowered = {h.lower() for h in header}
-
-    sealed_required = {"name", "quantity"}
-    sealed_hints = {"price date", "cost basis", "set"}
-    if sealed_required <= lowered and lowered & sealed_hints:
-        return "sealed", "sealed.csv"
 
     mapping = canonical_header(header)
     canonical = set(mapping.values())
@@ -66,6 +65,14 @@ def detect_kind(text: str) -> Tuple[str, str]:
         dialect = "ManaBox (current)" if "Title" in header else "ManaBox (legacy Name/Set code)"
         if known >= 6:
             return "singles", dialect
+
+    # Sealed lists are hand-written and start life as two columns — that is what
+    # `sealed template` produces and what the note in the vault describes. This
+    # previously also demanded a Set, Price date or Cost basis column, which
+    # rejected the very file the message below tells people to build.
+    lowered = {h.lower() for h in header}
+    if {"name", "quantity"} <= lowered:
+        return "sealed", "sealed.csv"
 
     raise DetectionError(
         "Couldn't tell what this file is. Expected a ManaBox export (a Title or "
