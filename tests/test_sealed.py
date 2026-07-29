@@ -31,12 +31,15 @@ from binders.sealed import (
     MATCH_SUFFIX,
     MATCH_UNMATCHED,
     MATCH_UUID,
+    SEALED_COLUMNS,
+    TEMPLATE_ROWS,
     SealedHolding,
     diff_sealed,
     load_sealed,
     resolve,
     save_sealed,
     summarize_sealed,
+    template_csv,
 )
 
 HERE = os.path.dirname(__file__)
@@ -628,3 +631,55 @@ class TestCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTemplate(unittest.TestCase):
+    """The starter file.
+
+    It is offered from two places now — `sealed template` and the web app's
+    Sealed screen — so the only interesting property is that it is one file,
+    and that the parser accepts what it hands out.
+    """
+
+    def test_the_header_is_the_parser_s_own_columns(self):
+        first = template_csv().splitlines()[0]
+        self.assertEqual(first.split(","), list(SEALED_COLUMNS))
+
+    def test_it_round_trips_through_the_loader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "sealed.csv")
+            with open(path, "w", newline="", encoding="utf-8") as handle:
+                handle.write(template_csv())
+            holdings, _ = resolve(load_sealed(path))
+
+        self.assertEqual(len(holdings), len(TEMPLATE_ROWS))
+        # Both example rows resolve — a template that shipped an unmatched name
+        # would teach the error on first contact.
+        self.assertTrue(all(h.resolved for h in holdings))
+        # And neither invents money.
+        self.assertTrue(all(h.price is None and h.cost_basis is None for h in holdings))
+
+    def test_the_ambiguous_example_needs_its_set_to_resolve(self):
+        """The second row exists to explain the Set column; check it earns it."""
+        name, set_hint = TEMPLATE_ROWS[1][0], TEMPLATE_ROWS[1][1]
+        self.assertTrue(set_hint)
+
+        with_hint, _ = resolve([SealedHolding(raw_name=name, set_hint=set_hint)])
+        without, _ = resolve([SealedHolding(raw_name=name)])
+
+        self.assertTrue(with_hint[0].resolved)
+        self.assertEqual(with_hint[0].set_code, set_hint)
+        self.assertEqual(without[0].match, MATCH_AMBIGUOUS)
+
+    def test_the_cli_writes_exactly_this(self):
+        import contextlib
+        import io as _io
+
+        from binders.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "sealed.csv")
+            with contextlib.redirect_stdout(_io.StringIO()):
+                self.assertEqual(main(["sealed", "template", "-o", path]), 0)
+            with open(path, newline="", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), template_csv())

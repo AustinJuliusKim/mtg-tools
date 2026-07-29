@@ -1207,3 +1207,44 @@ class TestBuylistExport(Base):
         self.assertEqual(
             self.client.get("/api/export/buylist?min_price=-5").status_code, 400
         )
+
+
+class TestSealedTemplate(Base):
+    """The starter file the Sealed screen hands out."""
+
+    def test_it_is_served_as_a_download(self):
+        response = self.client.get("/api/sealed/template")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response.headers["Content-Type"])
+        self.assertIn("sealed.csv", response.headers["Content-Disposition"])
+
+    def test_it_is_the_same_bytes_the_cli_writes(self):
+        from binders.sealed import template_csv
+
+        body = self.client.get("/api/sealed/template").get_data(as_text=True)
+        self.assertEqual(body, template_csv())
+
+    def test_what_it_hands_out_imports_cleanly(self):
+        """The point of the whole feature.
+
+        A template the importer rejected would walk someone straight into the
+        error it exists to prevent — so download it and put it back in.
+        """
+        body = self.client.get("/api/sealed/template").get_data()
+        upload = self.client.post(
+            "/api/imports",
+            data={"file": (io.BytesIO(body), "sealed.csv")},
+            content_type="multipart/form-data",
+            headers={"X-CSRF-Token": self.token},
+        ).get_json()
+        self.assertEqual(upload["kind"], "sealed")
+
+        detail = self.client.get(f"/api/imports/{upload['importId']}").get_json()
+        self.assertEqual(detail["blocking"], 0)
+
+        self.post(f"/api/imports/{upload['importId']}/commit")
+        rows = self.client.get("/api/sealed").get_json()["rows"]
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r["resolved"] for r in rows))
+        # The example rows carry no prices, and none are invented for them.
+        self.assertTrue(all(r["priceCents"] is None for r in rows))

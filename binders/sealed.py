@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import difflib
+import io
 import os
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
@@ -29,6 +30,8 @@ from .model import money
 __all__ = [
     "SEALED_COLUMNS",
     "KNOWN_CONDITIONS",
+    "TEMPLATE_ROWS",
+    "template_csv",
     "SealedHolding",
     "Issue",
     "SealedSummary",
@@ -56,6 +59,41 @@ SEALED_COLUMNS = (
 
 #: Sealed product condition is about the box, not the cards.
 KNOWN_CONDITIONS = ("sealed", "opened", "damaged")
+
+#: The two example rows in a starter file. One shows the minimum — a name and a
+#: quantity — and the other shows why a Set column exists at all: `Heavenly
+#: Inferno` is two different decks six years apart, and the printings differ
+#: several-fold in price.
+TEMPLATE_ROWS = (
+    ("Sneak Attack", "", "1", "sealed", "", "", "", "", ""),
+    (
+        "Heavenly Inferno",
+        "CMD",
+        "1",
+        "sealed",
+        "",
+        "",
+        "",
+        "",
+        "a Set is only needed when a name is ambiguous",
+    ),
+)
+
+
+def template_csv() -> str:
+    """A starter `sealed.csv`, as text.
+
+    Lives here rather than in the CLI so the file the web app hands you and the
+    file `sealed template` writes cannot drift apart — the columns are the
+    parser's contract, and two copies of a contract is one copy too many.
+    """
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\r\n")
+    writer.writerow(list(SEALED_COLUMNS))
+    for row in TEMPLATE_ROWS:
+        writer.writerow(list(row))
+    return buffer.getvalue()
+
 
 MATCH_EXACT = "exact"
 MATCH_NICKNAME = "nickname"

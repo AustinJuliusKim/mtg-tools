@@ -155,8 +155,13 @@ export function Sealed({
 
       {empty && (
         <Alert mb="md" title="No sealed product yet">
-          Import a sealed list from the <Anchor href="/imports">Import</Anchor>{' '}
-          screen — a CSV with Name and Quantity is enough to start.
+          <Text fz="sm" mb="sm">
+            Start from the template below, add a row per deck, then bring it
+            back through the <Anchor href="/imports">Import</Anchor> screen. Name
+            and Quantity are enough — everything else can wait until you price
+            them.
+          </Text>
+          <TemplateButton />
         </Alert>
       )}
 
@@ -251,6 +256,10 @@ export function Sealed({
             checked={unpriced}
             onChange={(e) => setUnpriced(e.currentTarget.checked)}
           />
+          {/* Adding to the shelf is a recurring job, not a one-off, so the
+              template stays reachable after the first import rather than
+              disappearing with the empty state. */}
+          <TemplateButton ml="auto" mt="lg" />
         </Group>
       </Paper>
 
@@ -370,6 +379,31 @@ export function Sealed({
         ]}
       />
     </>
+  )
+}
+
+/**
+ * A starter `sealed.csv`, straight from the server.
+ *
+ * A plain anchor rather than a fetch: the browser already knows how to save a
+ * file the server marks as an attachment, and this way it works with no
+ * JavaScript state to get wrong. The bytes are `binders.sealed.template_csv`,
+ * the same ones `binders sealed template` writes — a starter file that
+ * disagreed with the parser would walk you into the import error it exists to
+ * help you avoid.
+ */
+function TemplateButton(props: { ml?: string; mt?: string }) {
+  return (
+    <Button
+      component="a"
+      href="/api/sealed/template"
+      download="sealed.csv"
+      size="xs"
+      variant="default"
+      {...props}
+    >
+      Download template
+    </Button>
   )
 }
 

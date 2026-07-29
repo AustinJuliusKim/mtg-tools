@@ -27,6 +27,8 @@ from typing import Any, Dict, Optional
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
+from binders import sealed as sealed_lib
+
 from . import bulk, exporter, importer
 from . import operations as ops
 from . import sales
@@ -730,6 +732,21 @@ def export_ledger():
         headers={
             "Content-Disposition": 'attachment; filename="mtg_collection_tracker.csv"'
         },
+    )
+
+
+@api.get("/sealed/template")
+def sealed_template():
+    """A starter `sealed.csv`.
+
+    The same bytes `binders sealed template` writes — one function, imported —
+    because a starter file that disagreed with the parser would send people
+    straight into the import error it exists to avoid.
+    """
+    return Response(
+        sealed_lib.template_csv(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="sealed.csv"'},
     )
 
 
