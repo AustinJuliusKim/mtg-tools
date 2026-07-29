@@ -31,6 +31,7 @@ __all__ = [
     "extract_decks",
     "refresh",
     "nickname",
+    "split_display",
 ]
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -114,14 +115,38 @@ class Deck:
         return f"{self.name} [{self.set_code}]"
 
 
+#: Inverse of `Deck.display`. Kept beside it so the format and its parse cannot
+#: drift apart.
+_DISPLAY_SUFFIX = re.compile(r"\s*\[\s*([A-Za-z0-9]{2,6})\s*\]\s*$")
+
+
+def split_display(text: str) -> Tuple[str, str]:
+    """Split a trailing ``[SET]`` off a product name: `("Deck", "M3C")`.
+
+    `sealed doctor` offers its suggestions as `Deck.display`, so the obvious
+    repair for an unmatched row is to paste that suggestion into the Name
+    column. That paste used to fail: `_norm` turns the brackets into spaces, so
+    the set code survives as a trailing word that matches no product name and no
+    nickname — and doctor would then re-suggest the very string it had just
+    rejected. Callers strip the suffix before lookup and use it as a set hint.
+
+    Purely syntactic; the caller decides whether the code is real.
+    """
+    match = _DISPLAY_SUFFIX.search(text or "")
+    if not match:
+        return (text or "").strip(), ""
+    return text[: match.start()].strip(), match.group(1).upper()
+
+
 class Catalog:
     """The known sealed commander decks, indexed for lookup."""
 
-    __slots__ = ("decks", "_by_uuid", "_by_name", "_by_nickname")
+    __slots__ = ("decks", "_by_uuid", "_by_name", "_by_nickname", "_set_codes")
 
     def __init__(self, decks: Iterable[Deck]):
         self.decks: Tuple[Deck, ...] = tuple(decks)
         self._by_uuid: Dict[str, Deck] = {d.uuid: d for d in self.decks}
+        self._set_codes = frozenset(d.set_code.lower() for d in self.decks)
 
         # Name and nickname indexes map to *lists*, because collisions are real
         # and the caller has to be told about them.
@@ -142,6 +167,10 @@ class Catalog:
 
     def by_uuid(self, uuid: str) -> Optional[Deck]:
         return self._by_uuid.get(uuid)
+
+    def has_set(self, code: str) -> bool:
+        """Whether any known deck carries this set code."""
+        return code.strip().lower() in self._set_codes
 
     def by_name(self, text: str) -> List[Deck]:
         return list(self._by_name.get(_norm(text), ()))
