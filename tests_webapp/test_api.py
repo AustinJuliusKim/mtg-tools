@@ -10,12 +10,15 @@ how anything looks.
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 import os
 import re
 import unittest
+from decimal import Decimal
 
+from webapp import importer
 from webapp.app import create_app, serve
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -821,3 +824,427 @@ class TestSalesAndExport(Base):
             count = restored.execute("SELECT COUNT(*) FROM holdings").fetchone()[0]
             restored.close()
             self.assertEqual(count, 6)
+
+
+class TestSealedReachable(Base):
+    """Sealed used to be a one-way door.
+
+    The import screen advertised that it accepted sealed lists, rows landed in
+    the table, and then nothing could query, show or edit them again — they were
+    reachable only through a full export. These pin the round trip.
+    """
+
+    def setUp(self):
+        super().setUp()
+        import_id = self.upload(SEALED, "sealed.csv").get_json()["importId"]
+        # Skip the rows that can't resolve, so the rest can commit.
+        detail = self.client.get(f"/api/imports/{import_id}").get_json()
+        for issue in detail["issues"]:
+            if issue["blocking"]:
+                for row in issue["rows"]:
+                    self.post(
+                        f"/api/imports/{import_id}/rows/{row['id']}", {"skip": True}
+                    )
+        self.post(f"/api/imports/{import_id}/commit")
+
+    def sealed(self, query=""):
+        return self.client.get(f"/api/sealed{query}").get_json()
+
+    def test_imported_sealed_is_visible(self):
+        body = self.sealed()
+        self.assertGreater(body["totalRows"], 0)
+        names = [r["name"] for r in body["rows"]]
+        self.assertTrue(any("Sneak Attack" in n for n in names), names)
+
+    def test_rows_carry_resolved_identity_not_just_the_typed_name(self):
+        row = next(r for r in self.sealed()["rows"] if "Sneak Attack" in r["name"])
+        self.assertTrue(row["resolved"])
+        self.assertEqual(row["setCode"], "ZNC")
+        self.assertTrue(row["purchaseUrl"].startswith("https://mtgjson.com/links/"))
+
+    def test_money_is_integer_cents_here_too(self):
+        row = next(r for r in self.sealed()["rows"] if "Sneak Attack" in r["name"])
+        self.assertEqual(row["priceCents"], 4200)
+        self.assertIsInstance(row["priceCents"], int)
+        self.assertEqual(row["price"], "$42.00")
+
+    def test_import_keeps_every_money_and_provenance_column(self):
+        """The regression that hid behind the one-way door.
+
+        `_stage_sealed` read only name, set, quantity and condition, so Price,
+        Price date, Source and Cost basis were dropped on every sealed import
+        ever run. Nothing caught it because nothing could read a sealed row
+        back. One assertion per column, since a single lost column is the
+        whole failure.
+        """
+        row = next(r for r in self.sealed()["rows"] if "Sneak Attack" in r["name"])
+        self.assertEqual(row["priceCents"], 4200)
+        self.assertEqual(row["priceDate"], "2026-07-27")
+        self.assertEqual(row["priceSource"], "tcgplayer")
+        self.assertEqual(row["costBasisCents"], 3500)
+        # And the derived figure that depends on two of them.
+        self.assertEqual(row["gainCents"], 4200 - 3500)
+
+    def test_gain_is_null_without_a_cost_basis(self):
+        unpriced = [r for r in self.sealed()["rows"] if r["costBasisCents"] is None]
+        self.assertTrue(unpriced)
+        self.assertIsNone(unpriced[0]["gainCents"])
+
+    def test_totals_and_unpriced_count(self):
+        totals = self.sealed()["totals"]
+        self.assertGreater(totals["valueCents"], 0)
+        self.assertGreater(totals["unpriced"], 0)
+
+    def test_filters_work_and_typos_are_rejected(self):
+        self.assertLess(
+            self.sealed("?unpriced=1")["totalRows"], self.sealed()["totalRows"]
+        )
+        response = self.client.get("/api/sealed?prices_min=10")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["code"], "bad-filter")
+
+    def test_insights_carry_no_card_kingdom_rates(self):
+        """Sealed isn't going to CK, so those bands would match no real offer."""
+        body = self.client.get("/api/sealed/insights").get_json()
+        self.assertIn("byYear", body)
+        self.assertIn("coverage", body)
+        blob = json.dumps(body)
+        for token in ("cashCents", "creditCents", "cashPct", "tiers"):
+            self.assertNotIn(token, blob, token)
+
+    def test_coverage_splits_every_deck(self):
+        body = self.client.get("/api/sealed/insights").get_json()
+        cov = body["coverage"]
+        self.assertEqual(
+            cov["priced"] + cov["unpriced"], body["totals"]["quantity"]
+        )
+
+    # -- bulk over sealed --------------------------------------------------
+
+    def test_actions_offered_differ_by_kind(self):
+        sealed = {
+            a["key"] for a in self.client.get("/api/bulk/actions?kind=sealed").get_json()
+        }
+        holding = {
+            a["key"] for a in self.client.get("/api/bulk/actions?kind=holding").get_json()
+        }
+        # Sealed has a cost basis; singles have a language.
+        self.assertIn("cost_basis", sealed)
+        self.assertNotIn("cost_basis", holding)
+        self.assertIn("language", holding)
+        self.assertNotIn("language", sealed)
+
+    def test_a_verdict_on_sealed_reaches_the_sell_queue(self):
+        """The end of the one-way door: sealed can now be triaged and sold."""
+        ids = [r["id"] for r in self.sealed()["rows"][:2]]
+        self.post("/api/bulk", {
+            "kind": "sealed", "action": "verdict", "value": "sell", "ids": ids,
+        })
+
+        queue = self.client.get("/api/sales/queue").get_json()
+        sealed_in_queue = [q for q in queue if q["kind"] == "sealed"]
+        self.assertEqual(len(sealed_in_queue), 2)
+
+    def test_bulk_price_on_sealed_then_undo(self):
+        before = {r["id"]: r["priceCents"] for r in self.sealed()["rows"]}
+        ids = list(before)
+
+        self.post("/api/bulk", {
+            "kind": "sealed", "action": "price", "value": "10.00", "ids": ids,
+        })
+        after = {r["id"]: r["priceCents"] for r in self.sealed()["rows"]}
+        self.assertTrue(all(v == 1000 for v in after.values()))
+
+        self.post("/api/undo")
+        self.assertEqual(
+            {r["id"]: r["priceCents"] for r in self.sealed()["rows"]}, before
+        )
+
+    def test_cost_basis_turns_a_sale_into_a_realized_gain(self):
+        row = next(r for r in self.sealed()["rows"] if r["priceCents"] is not None)
+        self.post("/api/bulk", {
+            "kind": "sealed", "action": "cost_basis", "value": "20.00",
+            "ids": [row["id"]],
+        })
+        self.post("/api/bulk", {
+            "kind": "sealed", "action": "verdict", "value": "sell", "ids": [row["id"]],
+        })
+
+        item = next(
+            q for q in self.client.get("/api/sales/queue").get_json()
+            if q["kind"] == "sealed" and q["id"] == row["id"]
+        )
+        sale_id = self.post("/api/sales/list", {
+            "kind": "sealed", "id": item["id"],
+        }).get_json()["saleId"]
+        sold = self.post(f"/api/sales/{sale_id}/sold", {"sold": "60.00"}).get_json()
+
+        # 6000 - (2000 * quantity)
+        self.assertIsNotNone(sold["realizedGainCents"])
+        self.assertEqual(sold["realizedGainCents"], 6000 - 2000 * item["quantity"])
+
+    def test_select_all_matching_respects_the_sealed_filter(self):
+        body = self.post("/api/bulk", {
+            "kind": "sealed", "action": "verdict", "value": "keep",
+            "selectAll": True, "filters": {"unpriced": "1"},
+        }).get_json()
+        unpriced = self.sealed("?unpriced=1")["totalRows"]
+        self.assertEqual(body["affected"], unpriced)
+
+    def test_an_action_that_does_not_apply_is_refused(self):
+        ids = [r["id"] for r in self.sealed()["rows"][:1]]
+        response = self.post("/api/bulk", {
+            "kind": "sealed", "action": "language", "value": "en", "ids": ids,
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("does not apply", response.get_json()["error"])
+
+    def test_bulk_delete_on_sealed_reverses(self):
+        before = self.sealed()["totalRows"]
+        ids = [r["id"] for r in self.sealed()["rows"][:2]]
+        self.post("/api/bulk", {"kind": "sealed", "action": "delete", "ids": ids})
+        self.assertEqual(self.sealed()["totalRows"], before - 2)
+
+        self.post("/api/undo")
+        self.assertEqual(self.sealed()["totalRows"], before)
+
+    def test_sealed_appears_in_the_ledger(self):
+        import csv as _csv
+
+        text = self.client.get("/api/export/ledger").get_data(as_text=True)
+        rows = list(_csv.DictReader(io.StringIO(text)))
+        self.assertTrue(any(r["Source"] == "sealed" for r in rows))
+
+
+class TestKindDetection(Base):
+    """Which file is which.
+
+    The two formats overlap: a legacy ManaBox export starts
+    `Name,Set code,…,Quantity,…`, so it satisfies any sealed test loose enough
+    to accept a hand-written deck list. The order of the checks is what keeps
+    both honest, and these pin it from both sides.
+    """
+
+    def detect(self, text):
+        return importer.detect_kind(text)
+
+    def test_a_two_column_sealed_list_is_accepted(self):
+        # What `sealed template` produces, and what the rejection message has
+        # always promised was enough. It used to be rejected anyway.
+        kind, dialect = self.detect("Name,Quantity\r\nSneak Attack,1\r\n")
+        self.assertEqual(kind, "sealed")
+        self.assertEqual(dialect, "sealed.csv")
+
+    def test_a_legacy_manabox_export_is_never_read_as_sealed(self):
+        """The expensive direction to get wrong.
+
+        These headers carry Name *and* Quantity. Misfiling one would put every
+        single in the sealed table, where the singles views cannot see them.
+        """
+        header = (
+            "Name,Set code,Set name,Collector number,Foil,Rarity,Quantity,"
+            "ManaBox ID,Scryfall ID,Purchase price,Misprint,Altered,Condition,"
+            "Language,Purchase price currency,Added"
+        )
+        kind, dialect = self.detect(header + "\r\nBlack Lotus,LEA,Alpha,232,normal,rare,1,,,,,,near_mint,en,USD,\r\n")
+        self.assertEqual(kind, "singles")
+        self.assertIn("legacy", dialect)
+
+    def test_the_current_manabox_dialect_still_wins_too(self):
+        kind, _ = self.detect(read(SAMPLE).decode("utf-8"))
+        self.assertEqual(kind, "singles")
+
+    def test_a_file_that_is_neither_is_still_rejected(self):
+        with self.assertRaises(importer.DetectionError):
+            self.detect("Foo,Bar\r\n1,2\r\n")
+
+    def test_a_minimal_sealed_list_survives_the_whole_round_trip(self):
+        """Detection alone isn't the claim — the rows have to land and show up."""
+        body = self.client.post(
+            "/api/imports",
+            data={"file": (io.BytesIO(b"Name,Quantity\r\nSneak Attack,2\r\n"), "decks.csv")},
+            content_type="multipart/form-data",
+            headers={"X-CSRF-Token": self.token},
+        ).get_json()
+        self.assertEqual(body["kind"], "sealed")
+
+        self.post(f"/api/imports/{body['importId']}/commit")
+        rows = self.client.get("/api/sealed").get_json()["rows"]
+        self.assertEqual(len(rows), 1)
+        # The nickname resolves to the full product, and what was typed is kept
+        # alongside it rather than overwritten.
+        self.assertEqual(rows[0]["rawName"], "Sneak Attack")
+        self.assertEqual(rows[0]["name"], "Zendikar Rising Commander Deck Sneak Attack")
+        self.assertTrue(rows[0]["resolved"])
+        self.assertEqual(rows[0]["quantity"], 2)
+        # No price column in the file, so no price is invented.
+        self.assertIsNone(rows[0]["priceCents"])
+
+
+class TestBuylistExport(Base):
+    """The list you hand Card Kingdom.
+
+    `to_buylist_csv` was CLI-only, so the app that owns the verdicts couldn't
+    emit the shipment they imply.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.commit()
+        self.all_rows = self.rows()["rows"]
+
+    def mark(self, rows, verdict="sell"):
+        self.post("/api/bulk", {
+            "action": "verdict", "value": verdict,
+            "ids": [r["id"] for r in rows],
+        })
+
+    def buylist(self, query=""):
+        text = self.client.get(f"/api/export/buylist{query}").get_data(as_text=True)
+        return list(csv.DictReader(io.StringIO(text)))
+
+    def summary(self, query=""):
+        return self.client.get(f"/api/export/buylist/summary{query}").get_json()
+
+    def test_nothing_marked_means_an_empty_list_not_the_whole_collection(self):
+        self.assertEqual(self.buylist(), [])
+        self.assertEqual(self.summary()["rows"], 0)
+
+    def test_only_rows_marked_sell_are_on_it(self):
+        picked = [r for r in self.all_rows if r["priceCents"] and r["priceCents"] >= 100][:2]
+        self.mark(picked)
+        names = {r["Name"] for r in self.buylist()}
+        self.assertEqual(names, {r["title"] for r in picked})
+
+    def test_a_keep_verdict_is_not_a_sell_verdict(self):
+        picked = [r for r in self.all_rows if r["priceCents"] and r["priceCents"] >= 100][:2]
+        self.mark(picked, "keep")
+        self.assertEqual(self.buylist(), [])
+
+    def test_sub_dollar_cards_are_left_off_and_the_floor_moves(self):
+        # Built here rather than filtered out of the fixture: the fixture has
+        # no sub-$1 card, and a test that skips when it can't find one asserts
+        # nothing on the machine where it matters.
+        header = ",".join([
+            "Title", "Edition", "Foil", "Quantity", "Set name", "Collector number",
+            "Rarity", "ManaBox ID", "Scryfall ID", "Purchase price", "Misprint",
+            "Altered", "Condition", "Language", "Purchase price currency", "Added",
+        ])
+        cheap = (
+            f"{header}\r\n"
+            "Llanowar Elves,M19,0,4,Core Set 2019,314,common,1,1a,0.35,"
+            "false,false,near_mint,en,USD,2026-06-26T22:22:28.140Z\r\n"
+        ).encode("utf-8")
+        import_id = self.client.post(
+            "/api/imports",
+            data={"file": (io.BytesIO(cheap), "cheap.csv")},
+            content_type="multipart/form-data",
+            headers={"X-CSRF-Token": self.token},
+        ).get_json()["importId"]
+        self.post(f"/api/imports/{import_id}/commit")
+
+        row = next(r for r in self.rows()["rows"] if r["priceCents"] == 35)
+        self.mark([row])
+
+        self.assertEqual(self.buylist(), [])
+        kept = self.buylist("?min_price=0")
+        self.assertEqual([r["Name"] for r in kept], ["Llanowar Elves"])
+        self.assertEqual(kept[0]["Market total"], "1.40")
+
+    def test_a_listed_card_is_not_shipped_twice(self):
+        picked = [r for r in self.all_rows if r["priceCents"] and r["priceCents"] >= 100][:2]
+        self.mark(picked)
+        self.assertEqual(len(self.buylist()), 2)
+
+        self.post("/api/sales/list", {"kind": "holding", "id": picked[0]["id"]})
+        remaining = {r["Name"] for r in self.buylist()}
+        self.assertEqual(remaining, {picked[1]["title"]})
+
+    def test_estimates_match_the_tier_the_card_falls_in(self):
+        prime = [r for r in self.all_rows if (r["priceCents"] or 0) >= 2000][:1]
+        self.assertTrue(prime, "fixture should carry at least one $20+ card")
+        self.mark(prime)
+        row = self.buylist()[0]
+        total = Decimal(row["Market total"])
+        # $20+ band: 60% cash, 75% credit. Same CK_TIERS the CLI quotes.
+        self.assertEqual(Decimal(row["Est. cash"]), (total * Decimal("0.60")).quantize(Decimal("0.01")))
+        self.assertEqual(Decimal(row["Est. credit"]), (total * Decimal("0.75")).quantize(Decimal("0.01")))
+
+    def test_the_summary_agrees_with_the_file(self):
+        picked = [r for r in self.all_rows if r["priceCents"] and r["priceCents"] >= 100][:3]
+        self.mark(picked)
+        summary = self.summary()
+        rows = self.buylist()
+        self.assertEqual(summary["rows"], len(rows))
+        self.assertEqual(
+            summary["marketCents"],
+            int(sum(Decimal(r["Market total"]) for r in rows) * 100),
+        )
+
+    def test_sealed_never_appears_on_a_card_kingdom_list(self):
+        import_id = self.upload(SEALED, "sealed.csv").get_json()["importId"]
+        detail = self.client.get(f"/api/imports/{import_id}").get_json()
+        for issue in detail["issues"]:
+            if issue["blocking"]:
+                for row in issue["rows"]:
+                    self.post(f"/api/imports/{import_id}/rows/{row['id']}", {"skip": True})
+        self.post(f"/api/imports/{import_id}/commit")
+
+        sealed = self.client.get("/api/sealed").get_json()["rows"]
+        self.assertTrue(sealed)
+        self.post("/api/bulk", {
+            "kind": "sealed", "action": "verdict", "value": "sell",
+            "ids": [r["id"] for r in sealed],
+        })
+        # Marked sell, priced, and still absent: CK's rates are singles rates.
+        names = {r["Name"] for r in self.buylist()}
+        self.assertFalse(names & {r["name"] for r in sealed})
+
+    def test_a_bad_minimum_is_refused_rather_than_ignored(self):
+        self.assertEqual(
+            self.client.get("/api/export/buylist?min_price=cheap").status_code, 400
+        )
+        self.assertEqual(
+            self.client.get("/api/export/buylist?min_price=-5").status_code, 400
+        )
+
+
+class TestSealedTemplate(Base):
+    """The starter file the Sealed screen hands out."""
+
+    def test_it_is_served_as_a_download(self):
+        response = self.client.get("/api/sealed/template")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response.headers["Content-Type"])
+        self.assertIn("sealed.csv", response.headers["Content-Disposition"])
+
+    def test_it_is_the_same_bytes_the_cli_writes(self):
+        from binders.sealed import template_csv
+
+        body = self.client.get("/api/sealed/template").get_data(as_text=True)
+        self.assertEqual(body, template_csv())
+
+    def test_what_it_hands_out_imports_cleanly(self):
+        """The point of the whole feature.
+
+        A template the importer rejected would walk someone straight into the
+        error it exists to prevent — so download it and put it back in.
+        """
+        body = self.client.get("/api/sealed/template").get_data()
+        upload = self.client.post(
+            "/api/imports",
+            data={"file": (io.BytesIO(body), "sealed.csv")},
+            content_type="multipart/form-data",
+            headers={"X-CSRF-Token": self.token},
+        ).get_json()
+        self.assertEqual(upload["kind"], "sealed")
+
+        detail = self.client.get(f"/api/imports/{upload['importId']}").get_json()
+        self.assertEqual(detail["blocking"], 0)
+
+        self.post(f"/api/imports/{upload['importId']}/commit")
+        rows = self.client.get("/api/sealed").get_json()["rows"]
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r["resolved"] for r in rows))
+        # The example rows carry no prices, and none are invented for them.
+        self.assertTrue(all(r["priceCents"] is None for r in rows))

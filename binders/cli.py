@@ -445,15 +445,15 @@ def cmd_sealed_ledger(args) -> int:
 
 
 def cmd_sealed_template(args) -> int:
-    from .sealed import SEALED_COLUMNS
+    from .sealed import template_csv
 
     if os.path.exists(args.output) and not args.force:
         print(f"error: {args.output} already exists. Pass --force to overwrite.", file=sys.stderr)
         return 2
+    # The text itself lives in `binders.sealed`, so the file written here and
+    # the one the web app serves are the same file.
     with open(args.output, "w", newline="", encoding="utf-8") as handle:
-        handle.write(",".join(SEALED_COLUMNS) + "\r\n")
-        handle.write("Sneak Attack,,1,sealed,,,,,\r\n")
-        handle.write("Heavenly Inferno,CMD,1,sealed,,,,,a Set is only needed when a name is ambiguous\r\n")
+        handle.write(template_csv())
     print(f"Wrote {args.output}. Add a row per deck — Name and Quantity are enough to start.")
     print("Then run: python3 -m binders sealed doctor " + args.output)
     return 0

@@ -1,5 +1,10 @@
 import { useCallback, useMemo, useState } from 'react'
-import type { Filters, Holding, Selection } from '../api/client'
+import type { Filters, Selection } from '../api/client'
+
+/** Anything with an id — the hook does not care which table it came from. */
+interface Identifiable {
+  id: number
+}
 
 /**
  * Row selection for the collection table.
@@ -14,9 +19,9 @@ import type { Filters, Holding, Selection } from '../api/client'
  * Kept out of the component and unit-tested because this is the one piece of
  * UI where a bug becomes a data bug.
  */
-export interface SelectionState {
+export interface SelectionState<T extends Identifiable = Identifiable> {
   /** Rows ticked on the current page. */
-  picked: Holding[]
+  picked: T[]
   /** True when the user escalated to "everything matching the filter". */
   allMatching: boolean
   /** How many rows an action would touch, for the confirmation. */
@@ -25,7 +30,7 @@ export interface SelectionState {
   pageFull: boolean
   /** Whether offering the escalation would actually add rows. */
   canEscalate: boolean
-  setPicked: (rows: Holding[]) => void
+  setPicked: (rows: T[]) => void
   escalate: () => void
   collapseToPage: () => void
   clear: () => void
@@ -33,15 +38,15 @@ export interface SelectionState {
   toRequest: () => Selection
 }
 
-export function useSelection(
-  pageRows: Holding[],
+export function useSelection<T extends Identifiable = Identifiable>(
+  pageRows: T[],
   totalMatching: number,
   filters: Filters,
-): SelectionState {
-  const [picked, setPickedState] = useState<Holding[]>([])
+): SelectionState<T> {
+  const [picked, setPickedState] = useState<T[]>([])
   const [allMatching, setAllMatching] = useState(false)
 
-  const setPicked = useCallback((rows: Holding[]) => {
+  const setPicked = useCallback((rows: T[]) => {
     setPickedState(rows)
     // Any manual change drops the escalation: the user is now talking about
     // specific rows again.

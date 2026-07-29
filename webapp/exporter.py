@@ -30,7 +30,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Dict, Iterable, List, Optional, Tuple
 
-from binders.export import LEDGER_COLUMNS
+from binders.aggregate import CK_TIERS, cents
+from binders.export import BUYLIST_COLUMNS, LEDGER_COLUMNS
 
 from .db import format_cents
 
@@ -40,6 +41,9 @@ __all__ = [
     "table_names",
     "table_csv",
     "ledger_csv",
+    "buylist_csv",
+    "buylist_rows",
+    "buylist_summary",
     "bundle",
     "snapshot",
 ]
@@ -240,6 +244,111 @@ def ledger_csv(conn: sqlite3.Connection) -> str:
         })
 
     return buffer.getvalue()
+
+
+def buylist_rows(
+    conn: sqlite3.Connection, *, min_price_cents: int = 100
+) -> List[sqlite3.Row]:
+    """Singles marked sell that are actually available to ship.
+
+    Three exclusions, each for a different reason:
+
+    - **Verdict, not filters.** The queue on the Sell screen is already the sell
+      pile; a buylist assembled from whatever the table happened to be filtered
+      to would be a second pile that silently disagrees with the first.
+    - **Sealed is never here.** The rate bands below are Card Kingdom's
+      *singles* buylist rates, and sealed isn't going to CK. Pricing it at those
+      rates would print a number matching no offer anyone has made.
+    - **Already listed or sold is spoken for.** Putting a card in a CK shipment
+      while it sits in an eBay listing is how one card gets sold twice.
+    """
+    return conn.execute(
+        "SELECT h.* FROM holdings h "
+        "JOIN verdicts v ON v.subject_kind = 'holding' AND v.subject_id = h.id "
+        "LEFT JOIN sales s ON s.subject_kind = 'holding' AND s.subject_id = h.id "
+        "  AND s.status != 'cancelled' "
+        "WHERE v.verdict = 'sell' AND s.id IS NULL "
+        "  AND h.price_cents IS NOT NULL AND h.price_cents >= ? "
+        "ORDER BY (h.price_cents * h.quantity) DESC",
+        (int(min_price_cents),),
+    ).fetchall()
+
+
+def _rates(price_cents: int) -> Tuple[Decimal, Decimal]:
+    price = Decimal(int(price_cents)) / 100
+    for tier in CK_TIERS:
+        if tier.contains(price):
+            return tier.cash_rate, tier.credit_rate
+    return Decimal("0"), Decimal("0")
+
+
+def buylist_csv(conn: sqlite3.Connection, *, min_price_cents: int = 100) -> str:
+    """The submission list you hand a vendor, most valuable stack first.
+
+    Same columns and the same `CK_TIERS` rates as `binders.export.to_buylist_csv`,
+    so the CLI and the app cannot drift into quoting different estimates for the
+    same card. What the app adds is the verdict: the CLI has no idea which cards
+    you decided to sell, so it can only threshold on price.
+
+    Sub-$1 cards are dropped by default — a vendor pays close to nothing for
+    them and they inflate the shipment. The estimates are *estimates*; CK prices
+    each card individually and this is a planning figure, not an offer.
+    """
+    buffer = io.StringIO()
+    writer = csv.DictWriter(
+        buffer, fieldnames=list(BUYLIST_COLUMNS), lineterminator="\r\n"
+    )
+    writer.writeheader()
+
+    for row in buylist_rows(conn, min_price_cents=min_price_cents):
+        total_cents = row["price_cents"] * row["quantity"]
+        cash_rate, credit_rate = _rates(row["price_cents"])
+        total = Decimal(total_cents) / 100
+        writer.writerow({
+            "Name": row["title"],
+            "Set name": row["set_name"],
+            "Set code": row["edition"],
+            "Collector number": row["collector_number"],
+            "Foil": "foil" if row["foil"] else "",
+            "Quantity": row["quantity"],
+            "Market each": f"{Decimal(row['price_cents']) / 100:.2f}",
+            "Market total": f"{total:.2f}",
+            "Est. cash": f"{cents(total * cash_rate):.2f}",
+            "Est. credit": f"{cents(total * credit_rate):.2f}",
+            "Language": row["language"],
+            "Condition": row["condition"],
+        })
+    return buffer.getvalue()
+
+
+def buylist_summary(conn: sqlite3.Connection, *, min_price_cents: int = 100) -> Dict:
+    """What the button should say before you click it.
+
+    An export that silently produces a header and no rows is indistinguishable
+    from a broken one, so the count is shown up front.
+    """
+    rows = buylist_rows(conn, min_price_cents=min_price_cents)
+    market = sum(r["price_cents"] * r["quantity"] for r in rows)
+    cash = credit = Decimal("0")
+    for row in rows:
+        total = Decimal(row["price_cents"] * row["quantity"]) / 100
+        cash_rate, credit_rate = _rates(row["price_cents"])
+        cash += cents(total * cash_rate)
+        credit += cents(total * credit_rate)
+
+    cash_cents = int(cash * 100)
+    credit_cents = int(credit * 100)
+    return {
+        "rows": len(rows),
+        "quantity": sum(r["quantity"] for r in rows),
+        "marketCents": market,
+        "market": format_cents(market),
+        "cashCents": cash_cents,
+        "cash": format_cents(cash_cents),
+        "creditCents": credit_cents,
+        "credit": format_cents(credit_cents),
+        "minPriceCents": int(min_price_cents),
+    }
 
 
 def manifest(conn: sqlite3.Connection) -> str:

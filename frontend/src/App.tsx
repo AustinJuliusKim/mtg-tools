@@ -19,6 +19,7 @@ import { Imports } from './routes/Imports'
 import { Review } from './routes/Review'
 import { History } from './routes/History'
 import { ExportPanel, Sell } from './routes/Sell'
+import { Sealed } from './routes/Sealed'
 import { ChartsSkeleton, HeroSkeleton } from './components/Skeletons'
 
 /** Anything that changes data bumps this so views refetch. */
@@ -95,6 +96,7 @@ export function App() {
           <Text fw={650}>mtg-tools</Text>
           {[
             ['/', 'Collection'],
+            ['/sealed', 'Sealed'],
             ['/imports', 'Import'],
             ['/sell', 'Sell'],
             ['/history', 'History'],
@@ -132,6 +134,10 @@ export function App() {
       <AppShell.Main>
         <Routes>
           <Route path="/" element={<Collection revision={revision} onChange={bump} />} />
+          <Route
+            path="/sealed"
+            element={<Sealed revision={revision} onChange={bump} />}
+          />
           <Route path="/imports" element={<Imports onChange={bump} />} />
           <Route path="/imports/:id" element={<Review onChange={bump} />} />
           <Route path="/sell" element={<Sell revision={revision} onChange={bump} />} />

@@ -36,13 +36,19 @@ export function Review({ onChange }: { onChange: () => void }) {
 
   const { record, blocking } = detail
 
-  const act = async (fn: () => Promise<unknown>, message: string) => {
+  // Where a finished import should land you. A commit used to send everyone to
+  // '/' regardless of kind, so importing a sealed list dropped you on the
+  // singles collection with nothing changed — indistinguishable from an import
+  // that did nothing. Send people to the screen their rows actually went to.
+  const committed = record.kind === 'sealed' ? '/sealed' : '/'
+
+  const act = async (fn: () => Promise<unknown>, message: string, to: string) => {
     setBusy(true)
     try {
       await fn()
       notifications.show({ message, color: 'blue' })
       onChange()
-      navigate(blocking ? '/imports' : '/')
+      navigate(to)
     } catch (error) {
       notifications.show({
         message: error instanceof ApiError ? error.message : 'Failed',
@@ -68,11 +74,11 @@ export function Review({ onChange }: { onChange: () => void }) {
 
       <Group mb="md">
         <Button disabled={blocking > 0} loading={busy}
-                onClick={() => act(() => api.commitImport(importId), 'Committed. Undo is available.')}>
+                onClick={() => act(() => api.commitImport(importId), 'Committed. Undo is available.', committed)}>
           Commit {record.rowCount} rows
         </Button>
         <Button variant="default" loading={busy}
-                onClick={() => act(() => api.discardImport(importId), 'Discarded. Your collection was never touched.')}>
+                onClick={() => act(() => api.discardImport(importId), 'Discarded. Your collection was never touched.', '/imports')}>
           Discard
         </Button>
       </Group>
