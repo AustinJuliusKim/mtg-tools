@@ -24,7 +24,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .aggregate import cents
-from .catalog import Catalog, Deck, load_catalog, nickname
+from .catalog import Catalog, Deck, load_catalog, nickname, split_display
 from .model import money
 
 __all__ = [
@@ -314,6 +314,18 @@ def resolve(
             resolved.append(replace(holding, deck=deck, match=MATCH_UUID))
             continue
 
+        # A row may carry doctor's own suggestion, which is formatted
+        # `Name [SET]`. Strip that suffix before lookup — only when the code is
+        # real, so a name that merely ends in brackets is left alone — and let
+        # it stand in as a set hint when the Set column is empty. The explicit
+        # column still wins; `_filter_by_set` falls back if either disagrees.
+        lookup_name = holding.raw_name
+        set_hint = holding.set_hint
+        base, display_set = split_display(holding.raw_name)
+        if base and display_set and catalog.has_set(display_set):
+            lookup_name = base
+            set_hint = set_hint or display_set
+
         # Narrowest match first. Each tier is tried only if the previous found
         # nothing, which is what keeps "Wakanda Forever" resolving to the base
         # deck instead of going ambiguous against its Collector's Edition.
@@ -326,7 +338,7 @@ def resolve(
         candidates: List[Deck] = []
         match = MATCH_UNMATCHED
         for tier_name, lookup in tiers:
-            found = _filter_by_set(lookup(holding.raw_name), holding.set_hint)
+            found = _filter_by_set(lookup(lookup_name), set_hint)
             if found:
                 candidates, match = found, tier_name
                 break
@@ -378,7 +390,7 @@ def resolve(
 
         # Nothing matched. Offer the closest names so the fix is one edit.
         near = difflib.get_close_matches(
-            nickname(holding.raw_name),
+            nickname(lookup_name),
             [d.nickname for d in catalog.decks],
             n=3,
             cutoff=0.6,

@@ -298,6 +298,49 @@ class TestResolution(unittest.TestCase):
         self.assertIsNotNone(h.deck)
         self.assertTrue(h.deck.is_collectors_edition)
 
+    def test_every_display_string_round_trips(self):
+        """`doctor` prints its suggestions as `Deck.display` — `Name [SET]` —
+        so pasting one into the Name column is the intended one-edit repair.
+        Every such string therefore has to resolve to the deck it names.
+
+        It used to resolve to nothing: `_norm` turns the brackets into spaces,
+        leaving the set code as a trailing word that matches no name and no
+        nickname, so doctor re-suggested the exact string it had just rejected.
+        """
+        for deck in self.catalog:
+            with self.subTest(deck=deck.display):
+                h, _ = self._one(deck.display)
+                self.assertIsNotNone(h.deck, f"{deck.display} did not resolve")
+                self.assertEqual(h.deck.uuid, deck.uuid)
+
+    def test_a_display_suffix_does_not_collapse_a_deck_into_its_ce_sibling(self):
+        """The suffix is stripped for lookup, so the Collector's Edition guard
+        has to keep holding across it."""
+        h, _ = self._one("Warhammer 40000 Commander Deck Necron Dynasties [40K]")
+        self.assertIsNotNone(h.deck)
+        self.assertFalse(h.deck.is_collectors_edition)
+
+    def test_a_display_suffix_disambiguates_a_collision(self):
+        """`[SET]` stands in as a set hint when the Set column is empty."""
+        for code in ("CMD", "CMA"):
+            with self.subTest(code=code):
+                h, _ = self._one(f"Heavenly Inferno [{code}]")
+                self.assertIsNotNone(h.deck)
+                self.assertEqual(h.deck.set_code, code)
+
+    def test_the_set_column_outranks_a_display_suffix(self):
+        """Two set codes on one row is a contradiction; the explicit column is
+        the one the user edited on purpose."""
+        h, _ = self._one("Heavenly Inferno [CMD]", "CMA")
+        self.assertIsNotNone(h.deck)
+        self.assertEqual(h.deck.set_code, "CMA")
+
+    def test_an_unknown_bracketed_code_is_left_on_the_name(self):
+        """Only a real set code is treated as a display suffix — a name that
+        merely ends in brackets is not quietly rewritten."""
+        h, _ = self._one("Sneak Attack [NOTASET]")
+        self.assertEqual(h.match, MATCH_UNMATCHED)
+
     def test_unmatched_is_reported_with_suggestions(self):
         h, issues = self._one("Forces of the Imperiumm")
         unmatched = [i for i in issues if i.code == "unmatched"]
