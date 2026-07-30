@@ -1208,6 +1208,83 @@ class TestBuylistExport(Base):
             self.client.get("/api/export/buylist?min_price=-5").status_code, 400
         )
 
+    # -- the Card Kingdom shape ------------------------------------------
+
+    MANABOX_HEADER = ",".join([
+        "Title", "Edition", "Foil", "Quantity", "Set name", "Collector number",
+        "Rarity", "ManaBox ID", "Scryfall ID", "Purchase price", "Misprint",
+        "Altered", "Condition", "Language", "Purchase price currency", "Added",
+    ])
+
+    def import_rows(self, *rows):
+        blob = (self.MANABOX_HEADER + "\r\n" + "\r\n".join(rows) + "\r\n").encode("utf-8")
+        import_id = self.client.post(
+            "/api/imports",
+            data={"file": (io.BytesIO(blob), "extra.csv")},
+            content_type="multipart/form-data",
+            headers={"X-CSRF-Token": self.token},
+        ).get_json()["importId"]
+        self.post(f"/api/imports/{import_id}/commit")
+
+    def ck_text(self, query=""):
+        return self.client.get(f"/api/export/buylist/ck{query}").get_data(as_text=True)
+
+    def ck(self, query=""):
+        return list(csv.DictReader(io.StringIO(self.ck_text(query))))
+
+    def test_ck_file_carries_exactly_the_columns_ck_accepts(self):
+        """CK's importer rejects a file with any column beyond these four."""
+        self.assertEqual(
+            self.ck_text().split("\r\n")[0], "Card Name,Edition,Foil,Quantity"
+        )
+
+    def test_ck_edition_is_the_set_name_not_the_code(self):
+        """CK matches on the set name; the code would silently miss their catalog."""
+        self.import_rows(
+            "Grizzly Bears,M19,0,3,Core Set 2019,316,common,9931,cke1,2.00,"
+            "false,false,near_mint,en,USD,2026-06-26T22:22:28.140Z",
+        )
+        row = next(r for r in self.rows()["rows"] if r["title"] == "Grizzly Bears")
+        self.mark([row])
+        exported = next(r for r in self.ck() if r["Card Name"] == "Grizzly Bears")
+        self.assertEqual(exported["Edition"], "Core Set 2019")
+        self.assertEqual(exported["Quantity"], "3")
+
+    def test_ck_foil_is_one_or_zero(self):
+        self.import_rows(
+            "Shimmer Dragon,M19,1,2,Core Set 2019,315,rare,9932,cke2,5.00,"
+            "false,false,near_mint,en,USD,2026-06-26T22:22:28.140Z",
+            "Plain Bear,M19,0,1,Core Set 2019,317,common,9933,cke3,3.00,"
+            "false,false,near_mint,en,USD,2026-06-26T22:22:28.140Z",
+        )
+        picked = [
+            r for r in self.rows()["rows"]
+            if r["title"] in ("Shimmer Dragon", "Plain Bear")
+        ]
+        self.mark(picked)
+        foil = {r["Card Name"]: r["Foil"] for r in self.ck()}
+        self.assertEqual(foil["Shimmer Dragon"], "1")
+        self.assertEqual(foil["Plain Bear"], "0")
+
+    def test_ck_ships_the_same_pile_as_the_detailed_file(self):
+        """Two files, one pile: same rows, same floor, same listed-exclusion."""
+        picked = [r for r in self.all_rows if r["priceCents"] and r["priceCents"] >= 100][:3]
+        self.mark(picked)
+        self.assertEqual(
+            {(r["Card Name"], r["Quantity"]) for r in self.ck()},
+            {(r["Name"], r["Quantity"]) for r in self.buylist()},
+        )
+        self.post("/api/sales/list", {"kind": "holding", "id": picked[0]["id"]})
+        self.assertEqual(
+            {r["Card Name"] for r in self.ck()},
+            {r["Name"] for r in self.buylist()},
+        )
+
+    def test_ck_refuses_a_bad_minimum_too(self):
+        self.assertEqual(
+            self.client.get("/api/export/buylist/ck?min_price=cheap").status_code, 400
+        )
+
 
 class TestSealedTemplate(Base):
     """The starter file the Sealed screen hands out."""

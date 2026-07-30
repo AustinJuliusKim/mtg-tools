@@ -772,10 +772,23 @@ def export_buylist_summary():
 
 @api.get("/export/buylist")
 def export_buylist():
+    """The detailed CSV — every column, for destinations other than CK."""
     return Response(
         exporter.buylist_csv(db(), min_price_cents=_min_price_cents()),
         mimetype="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="ck_buylist.csv"'},
+        headers={"Content-Disposition": 'attachment; filename="buylist.csv"'},
+    )
+
+
+@api.get("/export/buylist/ck")
+def export_buylist_ck():
+    """The same rows in Card Kingdom's four-column import shape."""
+    return Response(
+        exporter.ck_submission_csv(db(), min_price_cents=_min_price_cents()),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="card_kingdom_submission.csv"'
+        },
     )
 
 

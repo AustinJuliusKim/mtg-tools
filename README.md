@@ -251,13 +251,18 @@ the API.
 | Sell | The queue verdicts feed, sale records, and the **Card Kingdom submission list**. |
 | History | Every operation, newest-first, with undo. |
 
-The **buylist export** (`GET /api/export/buylist`) writes the same columns and
-the same rate bands as `binders buylist`, so the CLI and the app can't quote
-different estimates for one card. What the app adds is the verdict: it exports
-what you marked *sell*, not everything over a price. Sealed never appears on it
-— those are CK's singles rates — and anything already listed or sold is skipped
-so one card can't be shipped twice. Sub-$1 is dropped by default
-(`?min_price=`), because a vendor pays close to nothing for them.
+The sell pile exports as **two files with the same rows**. The **Card Kingdom
+CSV** (`GET /api/export/buylist/ck`) carries exactly the four columns CK's
+importer accepts — `Card Name, Edition, Foil, Quantity` — where Edition is the
+set *name* (their catalog matches on it, not the code) and Foil is `1`/`0`. The
+**detailed CSV** (`GET /api/export/buylist`) writes the same columns and the
+same rate bands as `binders buylist`, so the CLI and the app can't quote
+different estimates for one card; that's the file for every other destination.
+What the app adds to both is the verdict: it exports what you marked *sell*,
+not everything over a price. Sealed never appears on either — those are CK's
+singles rates — and anything already listed or sold is skipped so one card
+can't be shipped twice. Sub-$1 is dropped by default (`?min_price=`), because a
+vendor pays close to nothing for them.
 
 The Sealed screen also hands out a starter `sealed.csv` — the same bytes
 `binders sealed template` writes, from one function, so the file you download

@@ -31,7 +31,7 @@ from decimal import Decimal
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from binders.aggregate import CK_TIERS, cents
-from binders.export import BUYLIST_COLUMNS, LEDGER_COLUMNS
+from binders.export import BUYLIST_COLUMNS, CK_SUBMISSION_COLUMNS, LEDGER_COLUMNS
 
 from .db import format_cents
 
@@ -44,6 +44,7 @@ __all__ = [
     "buylist_csv",
     "buylist_rows",
     "buylist_summary",
+    "ck_submission_csv",
     "bundle",
     "snapshot",
 ]
@@ -317,6 +318,33 @@ def buylist_csv(conn: sqlite3.Connection, *, min_price_cents: int = 100) -> str:
             "Est. credit": f"{cents(total * credit_rate):.2f}",
             "Language": row["language"],
             "Condition": row["condition"],
+        })
+    return buffer.getvalue()
+
+
+def ck_submission_csv(conn: sqlite3.Connection, *, min_price_cents: int = 100) -> str:
+    """The same sell pile, in the only shape Card Kingdom's importer takes.
+
+    CK rejects a file with any column beyond these four, and their "Edition"
+    is the set *name* — `holdings.edition` (the set code) would silently fail
+    to match their catalog. Foil is 1/0; an etched card has `foil = 1` and
+    counts, because CK has no separate etched flag.
+
+    Row selection is `buylist_rows`, unchanged: whatever the detailed CSV
+    would ship, this ships — two files, one pile.
+    """
+    buffer = io.StringIO()
+    writer = csv.DictWriter(
+        buffer, fieldnames=list(CK_SUBMISSION_COLUMNS), lineterminator="\r\n"
+    )
+    writer.writeheader()
+
+    for row in buylist_rows(conn, min_price_cents=min_price_cents):
+        writer.writerow({
+            "Card Name": row["title"],
+            "Edition": row["set_name"],
+            "Foil": "1" if row["foil"] else "0",
+            "Quantity": row["quantity"],
         })
     return buffer.getvalue()
 
