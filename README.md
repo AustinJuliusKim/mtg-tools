@@ -14,6 +14,26 @@ cd ~/personal/mtg-tools
 python3 -m binders summary ~/Desktop/Binders.csv ~/Desktop/Binders2.csv
 ```
 
+## Install as a tool
+
+Everything in this README works from a clone, no install. But the whole thing
+also ships as one package — built front end included — so a machine that has
+never seen this repo can run the collection manager:
+
+```bash
+uv tool install mtg-tools        # or: pipx install mtg-tools
+mtg-tools serve                  # http://127.0.0.1:8765
+```
+
+`uvx mtg-tools serve` works for a one-off run; upgrade with
+`uv tool upgrade mtg-tools`. Every command below is available as
+`mtg-tools <command>` — it is the same entry point as `python3 -m binders`.
+
+Your data is yours and stays put: the database lives at
+`~/.local/share/mtg-tools/collection.db` (`MTG_DB` overrides) and survives
+install, upgrade, and uninstall alike. **Back it up from the app** — History →
+Export bundle writes a ZIP that includes the database itself.
+
 ## Why merging matters
 
 Each binder is scanned separately, so a card owned in thirteen copies across
@@ -198,6 +218,10 @@ npm --prefix frontend ci
 npm --prefix frontend run build
 .venv/bin/python -m binders serve         # http://127.0.0.1:8765
 ```
+
+(Installed with `uv tool install mtg-tools` instead? Just `mtg-tools serve` —
+the wheel carries a prebuilt front end at `webapp/_dist`, so none of the Node
+steps apply.)
 
 Developing the UI? `npm --prefix frontend run dev` serves it on :5173 and
 proxies `/api` to Flask, so the browser sees one origin.

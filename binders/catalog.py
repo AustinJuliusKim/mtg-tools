@@ -32,10 +32,30 @@ __all__ = [
     "refresh",
     "nickname",
     "split_display",
+    "user_catalog_path",
+    "active_catalog_path",
 ]
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 CATALOG_PATH = os.path.join(DATA_DIR, "commander_decks.json")
+
+#: `refresh()` must not write next to `CATALOG_PATH`: an installed copy of this
+#: package lives in site-packages, which stays read-only. A refreshed catalog
+#: goes to the user's data dir instead, and the vendored file above remains the
+#: offline default until the first refresh.
+DEFAULT_USER_CATALOG_DIR = os.path.expanduser("~/.local/share/mtg-tools/catalog")
+
+
+def user_catalog_path() -> str:
+    """Where `refresh()` writes. `MTG_CATALOG_DIR` overrides the directory."""
+    base = os.environ.get("MTG_CATALOG_DIR") or DEFAULT_USER_CATALOG_DIR
+    return os.path.join(base, "commander_decks.json")
+
+
+def active_catalog_path() -> str:
+    """The file `load_catalog()` reads: a refreshed copy if present, else vendored."""
+    user = user_catalog_path()
+    return user if os.path.isfile(user) else CATALOG_PATH
 
 SETLIST_URL = "https://mtgjson.com/api/v5/SetList.json"
 
@@ -242,8 +262,9 @@ def _deck_from_json(raw: dict) -> Deck:
 
 
 def load_catalog(path: Optional[str] = None) -> Catalog:
-    """Read the vendored catalog. No network."""
-    with open(path or CATALOG_PATH, encoding="utf-8") as handle:
+    """Read the catalog — a refreshed user copy if one exists, else the
+    vendored file. No network."""
+    with open(path or active_catalog_path(), encoding="utf-8") as handle:
         blob = json.load(handle)
     return Catalog(_deck_from_json(d) for d in blob["decks"])
 
@@ -325,17 +346,20 @@ def refresh(
     url: str = SETLIST_URL,
     write: bool = True,
 ) -> Tuple[List[Deck], List[Deck], List[Deck]]:
-    """Rebuild the vendored catalog from MTGJSON.
+    """Rebuild the catalog from MTGJSON, writing to the user's data dir.
 
     Returns `(decks, added, removed)` so the caller can report what changed
-    instead of silently rewriting the file.
+    instead of silently rewriting the file. The diff baseline is whatever
+    `load_catalog()` currently reads — on a first refresh that is the vendored
+    file, so "added" means new since the vendored snapshot, not "everything".
 
     `fetch` is injectable: tests pass a function that returns fixture bytes, so
     the suite never opens a socket. That matters because `run_tests.py` fails on
     any skip other than "ManaBox exports absent", so a network-gated test would
     break the guard rather than quietly skipping.
     """
-    target = path or CATALOG_PATH
+    target = path or user_catalog_path()
+    baseline = path or active_catalog_path()
     fetcher = fetch or _default_fetch
 
     setlist = json.loads(fetcher(url).decode("utf-8"))
@@ -347,7 +371,7 @@ def refresh(
         )
 
     try:
-        before = {d.uuid: d for d in load_catalog(target)}
+        before = {d.uuid: d for d in load_catalog(baseline)}
     except (FileNotFoundError, KeyError, json.JSONDecodeError):
         before = {}
 

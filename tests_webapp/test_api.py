@@ -79,6 +79,13 @@ class TestSession(Base):
         self.assertIn("Imported", undoable["summary"])
 
 
+class TestHealth(Base):
+    def test_health_proves_the_schema_is_reachable(self):
+        body = self.client.get("/api/health").get_json()
+        self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["schemaVersion"], 1)
+
+
 class TestCsrf(Base):
     def test_mutation_without_the_header_is_refused(self):
         response = self.client.post("/api/bulk", json={"action": "verdict"})

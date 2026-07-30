@@ -34,8 +34,25 @@ __all__ = ["create_app", "serve", "csrf_token", "DIST"]
 MAX_UPLOAD_MB = 25
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-#: Vite's output. Built with `npm --prefix frontend run build`.
-DIST = os.path.abspath(os.path.join(HERE, os.pardir, "frontend", "dist"))
+
+
+def _resolve_dist() -> str:
+    """Vite's output, wherever this copy of the app keeps it.
+
+    An installed wheel carries the build at `webapp/_dist`; a repo checkout
+    builds to `frontend/dist` with `npm --prefix frontend run build`. `MTG_DIST`
+    overrides both.
+    """
+    override = os.environ.get("MTG_DIST")
+    if override:
+        return os.path.abspath(override)
+    packaged = os.path.join(HERE, "_dist")
+    if os.path.isdir(packaged):
+        return packaged
+    return os.path.abspath(os.path.join(HERE, os.pardir, "frontend", "dist"))
+
+
+DIST = _resolve_dist()
 
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
 
@@ -142,7 +159,12 @@ def _register(app: Flask) -> None:
 
     @app.get("/assets/<path:filename>")
     def assets(filename: str):
-        return send_from_directory(os.path.join(DIST, "assets"), filename)
+        # Vite fingerprints these filenames, so the bytes behind a given name
+        # never change — a year of immutable is safe, and index.html (which is
+        # never cached this way) is what swaps the names on a new build.
+        response = send_from_directory(os.path.join(DIST, "assets"), filename)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
 
     @app.get("/<path:filename>")
     def root_files(filename: str):
@@ -198,6 +220,7 @@ def serve(
     built = os.path.isfile(os.path.join(DIST, "index.html"))
     print(f"Collection manager on http://{host}:{port}")
     print(f"  database: {app.config['DATABASE']}")
+    print("  backup:   History → Export bundle (a ZIP that includes the database)")
     if not built:
         print(
             "  ⚠ front end not built — run `npm --prefix frontend ci && "

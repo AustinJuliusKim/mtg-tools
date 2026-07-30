@@ -61,6 +61,20 @@ def db() -> sqlite3.Connection:
     return _db()
 
 
+@api.get("/health")
+def health():
+    """Liveness with proof: the database opens and carries a schema version.
+
+    Exists for the packaging smoke test — an installed wheel that boots but
+    can't find its assets or its schema should fail here, not on first use.
+    """
+    row = db().execute("SELECT version FROM schema_version").fetchone()
+    return jsonify({
+        "status": "ok",
+        "schemaVersion": row["version"] if row else None,
+    })
+
+
 def _payload() -> Dict[str, Any]:
     return request.get_json(silent=True) or {}
 

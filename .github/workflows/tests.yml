@@ -125,6 +125,58 @@ jobs:
         # A broken front end should fail the PR, not the first `serve`.
         run: npm --prefix frontend run build
 
+  package:
+    name: package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Build the front end
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+
+      - name: Build the wheel
+        run: |
+          pip install build
+          python -m build
+
+      - name: Install the wheel into a clean venv
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install dist/*.whl
+
+      # Boot the *installed* app from a directory that is not the repo, so the
+      # packaged assets and vendored catalog must resolve from the wheel. This
+      # is the class of bug no unit suite can catch: everything imports, and
+      # the first `serve` on a user's machine 503s.
+      - name: Smoke-test the installed app
+        working-directory: /tmp
+        run: |
+          set -euo pipefail
+          /tmp/smoke/bin/mtg-tools serve --db /tmp/smoke.db --port 8901 &
+          for i in $(seq 1 40); do
+            curl -fs http://127.0.0.1:8901/api/health > /dev/null && break
+            sleep 0.5
+          done
+          curl -fs http://127.0.0.1:8901/api/health | grep -q '"schemaVersion"'
+          # The shell must be the built SPA (hashed asset refs), not the
+          # "front end isn't built" 503 page.
+          curl -fs http://127.0.0.1:8901/ | grep -q '/assets/'
+          /tmp/smoke/bin/mtg-tools sealed catalog --search "necron" > /dev/null
+
   e2e:
     name: e2e
     runs-on: ubuntu-latest

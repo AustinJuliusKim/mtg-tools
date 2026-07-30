@@ -16,7 +16,9 @@ from datetime import date
 from decimal import Decimal
 
 from binders.catalog import (
+    CATALOG_PATH,
     Catalog,
+    active_catalog_path,
     extract_decks,
     load_catalog,
     nickname,
@@ -188,6 +190,22 @@ class TestRefresh(unittest.TestCase):
             refresh(target, fetch=self._fetch)
             _, added, removed = refresh(target, fetch=self._fetch)
             self.assertEqual((added, removed), ([], []))
+
+    def test_default_target_honors_MTG_CATALOG_DIR(self):
+        """An installed package cannot write next to its own files, so the
+        default refresh target is the user's data dir — and once a refreshed
+        copy exists there, reads prefer it over the vendored file."""
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["MTG_CATALOG_DIR"] = tmp
+            try:
+                self.assertEqual(active_catalog_path(), CATALOG_PATH)
+                refresh(fetch=self._fetch)
+                written = os.path.join(tmp, "commander_decks.json")
+                self.assertTrue(os.path.isfile(written))
+                self.assertEqual(active_catalog_path(), written)
+                self.assertEqual(len(load_catalog()), 32)
+            finally:
+                del os.environ["MTG_CATALOG_DIR"]
 
     def test_dry_run_does_not_write(self):
         with tempfile.TemporaryDirectory() as tmp:

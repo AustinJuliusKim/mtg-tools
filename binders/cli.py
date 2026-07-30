@@ -490,7 +490,7 @@ def cmd_sealed_dashboard(args) -> int:
 
 
 def cmd_sealed_refresh(args) -> int:
-    from .catalog import CATALOG_PATH, refresh
+    from .catalog import refresh, user_catalog_path
 
     print(f"Fetching MTGJSON SetList (this is the only networked command)...")
     decks, added, removed = refresh(write=not args.dry_run)
@@ -502,7 +502,7 @@ def cmd_sealed_refresh(args) -> int:
     if not added and not removed:
         print("No change — the vendored catalog is already current.")
     if args.dry_run:
-        print(f"\n--dry-run: {CATALOG_PATH} not written.")
+        print(f"\n--dry-run: {user_catalog_path()} not written.")
     return 0
 
 
