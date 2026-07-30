@@ -193,14 +193,21 @@ stores the collection so imports accumulate, verdicts survive, and sales can be
 tracked over time. React 19 + Mantine on the front, Flask + SQLite behind it.
 
 ```bash
+make serve                                # http://127.0.0.1:8765
+```
+
+which is shorthand for (and always runs, so `dist` can't go stale):
+
+```bash
 nvm use                                   # Node 24 (see .nvmrc)
 npm --prefix frontend ci
 npm --prefix frontend run build
 .venv/bin/python -m binders serve         # http://127.0.0.1:8765
 ```
 
-Developing the UI? `npm --prefix frontend run dev` serves it on :5173 and
-proxies `/api` to Flask, so the browser sees one origin.
+Developing the UI? `make dev` runs the vite dev server on :5173 (hot reload,
+proxies `/api` to Flask) and the Flask API together in one terminal; Ctrl-C
+stops both. `make help` lists the rest (`test`, `e2e`, `check`).
 
 ### The two halves reload differently — and that will bite you
 

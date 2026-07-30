@@ -48,11 +48,15 @@ write down, not a default.
 ## Running it
 
 ```sh
-nvm use                                   # Node 24, pinned in .nvmrc
-npm --prefix frontend ci && npm --prefix frontend run build
-.venv/bin/python -m binders serve         # http://127.0.0.1:8765
-npm --prefix frontend run dev             # UI on :5173, proxies /api to Flask
+make serve   # build the front end, then Flask on :8765 — never a stale dist
+make dev     # hot-reload UI on :5173 + Flask API together
+make test    # the three fast suites; `make e2e` for Playwright; `make check` for all
 ```
+
+`make help` lists everything. The Makefile bootstraps `.venv` itself and fails
+fast with a "run: nvm use" hint on a Node mismatch. The underlying commands
+(`npm --prefix frontend run build`, `.venv/bin/python -m binders serve`, …)
+still work directly — make only sequences them.
 
 ## Verify by running it, not only by testing it
 
