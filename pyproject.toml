@@ -12,6 +12,9 @@ name = "mtg-tools"
 version = "0.1.0"
 description = "Local-first Magic: The Gathering collection manager — web app, CLI, and self-contained dashboards over ManaBox exports."
 readme = "README.md"
+# SPDX expression on purpose: it needs no file at build time, so this branch
+# and the one adding LICENSE can merge in either order.
+license = "MIT"
 requires-python = ">=3.9"
 dependencies = [
     "flask>=2.3,<4",
