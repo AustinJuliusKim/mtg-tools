@@ -22,6 +22,7 @@ __all__ = [
     "tier_table",
     "multi_copy_table",
     "top_table",
+    "CK_SUBMISSION_COLUMNS",
 ]
 
 
@@ -38,6 +39,16 @@ BUYLIST_COLUMNS = (
     "Est. credit",
     "Language",
     "Condition",
+)
+
+# Card Kingdom's CSV importer accepts exactly these four columns and rejects a
+# file with more. "Edition" is their word for the set *name* — not the set
+# code that this package's `edition` field carries.
+CK_SUBMISSION_COLUMNS = (
+    "Card Name",
+    "Edition",
+    "Foil",
+    "Quantity",
 )
 
 # Schema from ObsidianVault 30-projects/Financial Freedom Profile.md — Moxfield's

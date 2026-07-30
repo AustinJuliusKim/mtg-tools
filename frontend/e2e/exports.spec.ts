@@ -60,8 +60,9 @@ test.describe('exports', () => {
     await expect(
       page.getByText(/Nothing to submit yet — mark rows sell/),
     ).toBeVisible()
-    // A real <button> when empty, not a styled-inert <a> that still navigates.
-    await expect(page.getByRole('button', { name: 'Buylist CSV' })).toBeDisabled()
+    // Real <button>s when empty, not styled-inert <a>s that still navigate.
+    await expect(page.getByRole('button', { name: 'Card Kingdom CSV' })).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'Detailed CSV' })).toBeDisabled()
 
     // Mark both sell through the bulk bar. The action Select already defaults
     // to "Set verdict" — see the note in bulk.spec.ts about not touching it.
@@ -82,10 +83,28 @@ test.describe('exports', () => {
     await expect(page.getByText(/\$52\.00 at market/)).toBeVisible()
     await expect(page.getByText(/\$31\.20 cash/)).toBeVisible()
 
+    // The CK file: exactly the four columns their importer accepts.
+    const [ckDownload] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('link', { name: 'Card Kingdom CSV' }).click(),
+    ])
+    expect(ckDownload.suggestedFilename()).toBe('card_kingdom_submission.csv')
+
+    const stream = await ckDownload.createReadStream()
+    const text = await new Promise<string>((resolve, reject) => {
+      const chunks: Buffer[] = []
+      stream.on('data', (c) => chunks.push(Buffer.from(c)))
+      stream.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
+      stream.on('error', reject)
+    })
+    expect(text.split('\r\n')[0]).toBe('Card Name,Edition,Foil,Quantity')
+    expect(text).toContain('Selling Sphinx')
+
+    // The detailed file keeps every column, for non-CK destinations.
     const [download] = await Promise.all([
       page.waitForEvent('download'),
-      page.getByRole('link', { name: 'Buylist CSV' }).click(),
+      page.getByRole('link', { name: 'Detailed CSV' }).click(),
     ])
-    expect(download.suggestedFilename()).toBe('ck_buylist.csv')
+    expect(download.suggestedFilename()).toBe('buylist.csv')
   })
 })

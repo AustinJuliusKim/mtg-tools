@@ -414,25 +414,43 @@ function BuylistPanel({ revision }: { revision: number }) {
         </div>
         {/* A `disabled` anchor is not disabled — it still navigates, and only
             looks inert because of styling. With nothing marked sell that means
-            downloading a lone header row. So render a real button when there
-            is nothing to fetch, and a link only when there is. */}
+            downloading a lone header row. So render real buttons when there
+            is nothing to fetch, and links only when there is. */}
         {summary === null || empty ? (
-          <Button variant="default" disabled>
-            Buylist CSV
-          </Button>
+          <Group gap="xs" wrap="nowrap">
+            <Button variant="filled" disabled>
+              Card Kingdom CSV
+            </Button>
+            <Button variant="default" disabled>
+              Detailed CSV
+            </Button>
+          </Group>
         ) : (
-          <Button component="a" href="/api/export/buylist" download variant="default">
-            Buylist CSV
-          </Button>
+          <Group gap="xs" wrap="nowrap">
+            <Button
+              component="a"
+              href="/api/export/buylist/ck"
+              download
+              variant="filled"
+            >
+              Card Kingdom CSV
+            </Button>
+            <Button component="a" href="/api/export/buylist" download variant="default">
+              Detailed CSV
+            </Button>
+          </Group>
         )}
       </Group>
       {summary !== null && !empty && (
         <Text c="dimmed" fz="xs" mt="sm">
-          Sub-$1 cards are left off — a vendor pays close to nothing for them and
-          they inflate the shipment. Cards already listed or sold are excluded so
-          nothing gets sold twice. The cash and credit figures are this project's
-          fixed rate bands, not CK's per-card offers: a planning number, not a
-          quote.
+          The Card Kingdom file carries only the four columns their importer
+          accepts (Card Name, Edition, Foil, Quantity); the detailed file keeps
+          prices, condition and language for every other destination. Both list
+          the same cards. Sub-$1 cards are left off — a vendor pays close to
+          nothing for them and they inflate the shipment. Cards already listed
+          or sold are excluded so nothing gets sold twice. The cash and credit
+          figures are this project's fixed rate bands, not CK's per-card offers:
+          a planning number, not a quote.
         </Text>
       )}
     </Card>
