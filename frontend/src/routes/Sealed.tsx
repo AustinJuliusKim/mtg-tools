@@ -30,6 +30,7 @@ import {
   type SealedPage,
   type SealedRow,
 } from '../api/client'
+import { downloadProps } from '../api/download'
 import { useSelection } from '../components/useSelection'
 import { ChartsSkeleton, HeroSkeleton, Refetching } from '../components/Skeletons'
 
@@ -395,11 +396,9 @@ export function Sealed({
 function TemplateButton(props: { ml?: string; mt?: string }) {
   return (
     <Button
-      component="a"
-      href="/api/sealed/template"
-      download="sealed.csv"
       size="xs"
       variant="default"
+      {...downloadProps('sealed-template', '/api/sealed/template')}
       {...props}
     >
       Download template

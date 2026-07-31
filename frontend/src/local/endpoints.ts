@@ -35,6 +35,7 @@ import {
   stageImport,
 } from './importer'
 import { UndoLookupError, latestUndoable, recent, undoOperation } from './operations'
+import * as exporter from './exporter'
 import * as repo from './repo'
 
 //: Query parameters that are not filters. Anything else must be a known filter.
@@ -225,6 +226,23 @@ export interface WorkerContext {
   vfs(): string
   schemaVersion(): number
   importDatabase(bytes: Uint8Array): Promise<{ holdings: number; sealed: number }>
+  exportDb(): Uint8Array | null
+}
+
+/** api.py's `_min_price_cents`: `?min_price=` dollars, default $1 floor. */
+function minPriceCents(raw: unknown): number {
+  if (raw === null || raw === undefined || raw === '') return 100
+  const text = String(raw).trim()
+  const match = /^([+-]?)(?:(\d+)(?:\.(\d*))?|\.(\d+))$/.exec(text)
+  if (!match) {
+    throw new ApiFailure(`'${raw}' isn't a price.`, 'bad-min-price', 400)
+  }
+  if (match[1] === '-') {
+    throw new ApiFailure("A minimum price can't be negative.", 'bad-min-price', 400)
+  }
+  // Python does int(Decimal(raw) * 100) — truncation, not rounding.
+  const frac = ((match[3] ?? match[4] ?? '') + '00').slice(0, 2)
+  return Number(match[2] ?? '0') * 100 + Number(frac)
 }
 
 type QueryPayload = { filters?: repo.FilterValues; opts?: repo.FilterValues }
@@ -611,6 +629,53 @@ export function makeRoutes(ctx: WorkerContext) {
       const db = ctx.db()
       transaction(db, () => discardImport(db, payload.id))
       return { discarded: payload.id }
+    },
+
+    exportManifest: () => {
+      const db = ctx.db()
+      return { tables: exporter.tableNames(db), ...exporter.manifest(db) }
+    },
+
+    buylistSummary: (payload: { minPrice?: string }) =>
+      exporter.buylistSummary(ctx.db(), minPriceCents(payload?.minPrice)),
+
+    download: (payload: { name?: string; table?: string; minPrice?: string }) => {
+      const db = ctx.db()
+      const encoder = new TextEncoder()
+      const csv = (filename: string, text: string) => ({
+        filename,
+        mime: 'text/csv',
+        bytes: encoder.encode(text),
+      })
+      switch (payload?.name) {
+        case 'table': {
+          try {
+            return csv(`${payload.table}.csv`, exporter.tableCsv(db, payload.table ?? ''))
+          } catch (error) {
+            if (error instanceof exporter.NotExportable) {
+              throw new ApiFailure(error.message, 'not-exportable', 404)
+            }
+            throw error
+          }
+        }
+        case 'ledger':
+          return csv('mtg_collection_tracker.csv', exporter.ledgerCsv(db))
+        case 'buylist':
+          return csv('buylist.csv', exporter.buylistCsv(db, minPriceCents(payload.minPrice)))
+        case 'buylist-ck':
+          return csv(
+            'card_kingdom_submission.csv',
+            exporter.ckSubmissionCsv(db, minPriceCents(payload.minPrice)),
+          )
+        case 'sealed-template':
+          return csv('sealed.csv', exporter.templateCsv())
+        case 'bundle': {
+          const { filename, bytes } = exporter.bundle(db, ctx.exportDb())
+          return { filename, mime: 'application/zip', bytes }
+        }
+        default:
+          throw new ApiFailure(`'${payload?.name}' is not downloadable`, 'not-found', 404)
+      }
     },
 
     /** Debug/parity only: freeze the worker clock so timestamps deep-equal

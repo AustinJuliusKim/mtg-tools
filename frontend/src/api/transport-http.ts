@@ -4,7 +4,23 @@
  * local transport deliberately lacks.
  */
 
-import { ApiError, type Api, type Filters, type Operation } from './types'
+import {
+  ApiError,
+  type Api,
+  type DownloadName,
+  type DownloadOptions,
+  type Filters,
+  type Operation,
+} from './types'
+
+const DOWNLOAD_URLS: Record<DownloadName, (opts?: DownloadOptions) => string> = {
+  bundle: () => '/api/export/bundle',
+  ledger: () => '/api/export/ledger',
+  buylist: (o) => `/api/export/buylist${o?.minPrice ? `?min_price=${o.minPrice}` : ''}`,
+  'buylist-ck': (o) => `/api/export/buylist/ck${o?.minPrice ? `?min_price=${o.minPrice}` : ''}`,
+  'sealed-template': () => '/api/sealed/template',
+  table: (o) => `/api/export/table/${o?.table ?? ''}`,
+}
 
 let csrfToken = ''
 
@@ -50,6 +66,23 @@ function post<T>(path: string, body: unknown): Promise<T> {
 }
 
 export const httpApi: Api = {
+  async download(name, opts) {
+    const response = await fetch(DOWNLOAD_URLS[name](opts), { credentials: 'same-origin' })
+    if (!response.ok) {
+      const body = response.headers.get('content-type')?.includes('application/json')
+        ? await response.json()
+        : null
+      throw new ApiError(
+        body?.error ?? `Download failed (${response.status})`,
+        body?.code ?? 'error',
+        response.status,
+      )
+    }
+    const disposition = response.headers.get('content-disposition') ?? ''
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `${name}.csv`
+    return { filename, blob: await response.blob() }
+  },
+
   async session() {
     const body = await request<{
       csrfToken: string

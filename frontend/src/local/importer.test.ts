@@ -33,6 +33,7 @@ function routesFor(db: Db): Routes {
     vfs: () => 'memory',
     schemaVersion: () => 1,
     importDatabase: () => Promise.reject(new Error('not under test')),
+    exportDb: () => null,
   })
 }
 
