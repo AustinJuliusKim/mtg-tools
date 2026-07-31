@@ -47,6 +47,14 @@ export function rpc<T>(route: string, payload?: unknown): Promise<T> {
 
 export const pingLocal = () => rpc<PingResult>('ping')
 
+/**
+ * Local-only: replace the OPFS database with an uploaded `.db` file — the
+ * migration path from a server install's `~/.local/share/mtg-tools/collection.db`.
+ * Not part of `Api`; the http backend has no equivalent and never will.
+ */
+export const importLocalDatabase = (file: File) =>
+  rpc<{ imported: boolean; holdings: number; sealed: number }>('importDatabase', { file })
+
 export const localApi: Api = {
   session: () => rpc('session'),
   collection: (filters, opts = {}) => rpc('collection', { filters, opts }),
