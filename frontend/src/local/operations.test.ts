@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import SCHEMA from '../../../webapp/schema.sql?raw'
-import { initSchema, transaction, type Database } from './db'
+import { initSchema, wrapDb, transaction, type Database } from './db'
 import {
   UndoLookupError,
   latestUndoable,
@@ -25,7 +25,7 @@ type Db = Database & { close(): void }
 async function openDb(): Promise<Db> {
   const { default: sqlite3InitModule } = await import('@sqlite.org/sqlite-wasm')
   const sqlite3 = await sqlite3InitModule()
-  const db = new sqlite3.oo1.DB(':memory:') as never as Db
+  const db = wrapDb(new sqlite3.oo1.DB(':memory:') as never) as Db
   initSchema(db, SCHEMA)
   return db
 }

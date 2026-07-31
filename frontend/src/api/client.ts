@@ -7,7 +7,7 @@
  * — and the parity harness that gates retiring the server.
  */
 
-import { localApi, pingLocal } from './transport-local'
+import { importLocalDatabase, localApi, pingLocal } from './transport-local'
 import { httpApi } from './transport-http'
 import type { Api } from './types'
 
@@ -22,7 +22,12 @@ if (useLocal && typeof window !== 'undefined') {
   // Debug/boot hooks: let a smoke script (and a curious devtools user) await
   // the worker's first answer, see which VFS mounted, and drive endpoints
   // directly — scripts/check-local-boot.mjs asserts through these.
-  const w = window as unknown as { __localBoot: Promise<unknown>; __localApi: Api }
+  const w = window as unknown as {
+    __localBoot: Promise<unknown>
+    __localApi: Api
+    __localImportDb: typeof importLocalDatabase
+  }
   w.__localBoot = pingLocal()
   w.__localApi = localApi
+  w.__localImportDb = importLocalDatabase
 }

@@ -10,12 +10,12 @@ import { describe, expect, it } from 'vitest'
 // The exact file the worker executes, via the same ?raw import — Vitest runs
 // imports through Vite, so this works in the node environment too.
 import SCHEMA from '../../../webapp/schema.sql?raw'
-import { initSchema, transaction, type Database } from './db'
+import { initSchema, wrapDb, transaction, type Database } from './db'
 
 async function openDb(): Promise<Database & { close(): void; selectObjects(sql: string): Record<string, unknown>[] }> {
   const { default: sqlite3InitModule } = await import('@sqlite.org/sqlite-wasm')
   const sqlite3 = await sqlite3InitModule()
-  return new sqlite3.oo1.DB(':memory:') as never
+  return wrapDb(new sqlite3.oo1.DB(':memory:') as never) as never
 }
 
 describe('schema on sqlite-wasm', () => {

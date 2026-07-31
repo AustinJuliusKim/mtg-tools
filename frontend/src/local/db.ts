@@ -24,6 +24,29 @@ export interface Database {
 
 export const SCHEMA_VERSION = 1
 
+/**
+ * Normalize a raw sqlite-wasm oo1 DB to the `Database` surface. One real job:
+ * oo1 throws "statement has no bindable parameters" when handed an empty bind
+ * array, while the ported code (like Python's sqlite3) passes `[]` freely for
+ * unfiltered queries — so empty binds are dropped here, once.
+ */
+export function wrapDb(raw: {
+  exec(arg: unknown): unknown
+  selectValue(sql: string, bind?: unknown[]): unknown
+  selectObject(sql: string, bind?: unknown[]): Record<string, unknown> | undefined
+  selectObjects(sql: string, bind?: unknown[]): Record<string, unknown>[]
+  close(): void
+}): Database & { close(): void } {
+  const args = (bind?: unknown[]) => (bind && bind.length ? [bind] : [])
+  return {
+    exec: (sql) => raw.exec(sql),
+    selectValue: (sql, bind) => raw.selectValue(sql, ...(args(bind) as [unknown[]?])),
+    selectObject: (sql, bind) => raw.selectObject(sql, ...(args(bind) as [unknown[]?])),
+    selectObjects: (sql, bind) => raw.selectObjects(sql, ...(args(bind) as [unknown[]?])),
+    close: () => raw.close(),
+  }
+}
+
 // The wall clock, injectable as one module-level switch so the parity harness
 // can freeze time across both backends without threading a parameter through
 // every ported call site.
@@ -103,15 +126,45 @@ export function transaction<T>(db: Database, fn: () => T): T {
   }
 }
 
-/** Idempotent schema init: exec the (IF NOT EXISTS) schema, stamp the version. */
+//: Columns added after the first release. Applied idempotently so an existing
+//: database (e.g. an imported collection.db) picks them up without a
+//: migration framework. Mirrors webapp/db.py LATE_COLUMNS.
+export const LATE_COLUMNS: Array<[table: string, column: string, decl: string]> = [
+  ['sales', 'subject_name', "TEXT NOT NULL DEFAULT ''"],
+  ['sales', 'subject_set', "TEXT NOT NULL DEFAULT ''"],
+]
+
+function addMissingColumns(db: Database): void {
+  for (const [table, column, decl] of LATE_COLUMNS) {
+    const existing = db
+      .selectObjects(`PRAGMA table_info(${table})`)
+      .map((r) => r.name as string)
+    if (!existing.includes(column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`)
+    }
+  }
+}
+
+/**
+ * Port of `webapp/db.py init_db`: exec the (IF NOT EXISTS) schema, apply late
+ * columns, stamp or verify the version. Idempotent — the app reopens the same
+ * OPFS file every boot, and an imported database passes through here too.
+ */
 export function initSchema(db: Database, schemaSql: string): number {
   db.exec(schemaSql)
+  addMissingColumns(db)
   const version = db.selectValue('SELECT version FROM schema_version') as
     | number
     | undefined
   if (version === undefined || version === null) {
     db.exec(`INSERT INTO schema_version (version) VALUES (${SCHEMA_VERSION})`)
     return SCHEMA_VERSION
+  }
+  if (version !== SCHEMA_VERSION) {
+    throw new Error(
+      `database is schema v${version}, this build expects v${SCHEMA_VERSION} — ` +
+        'no migration path is defined yet',
+    )
   }
   return version
 }

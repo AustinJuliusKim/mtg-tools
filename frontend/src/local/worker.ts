@@ -8,93 +8,78 @@
  * modes, non-worker test contexts), we fall back to an in-memory database and
  * say so in `ping` — the UI can then warn that nothing persists.
  *
- * Phase 0: boots, runs the schema (the exact `webapp/schema.sql`, imported as
- * text), answers `ping`. Every other route answers `not-implemented` until
- * its phase ports it — the route table below is the port's checklist.
+ * Route handlers live in `endpoints.ts` (the api.py port); this file is only
+ * boot, storage ownership, and RPC dispatch. Routes not yet ported answer
+ * 501 — the phases 3–5 checklist.
  */
 
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm'
 import schemaSql from '../../../webapp/schema.sql?raw'
-import { initSchema, transaction, type Database } from './db'
+import { initSchema, wrapDb, type Database } from './db'
 import { ApiFailure } from './errors'
-import {
-  UndoLookupError,
-  latestUndoable,
-  recent,
-  undoOperation,
-} from './operations'
-import type { PingResult, RpcRequest, RpcResponse } from './rpc'
+import { makeRoutes } from './endpoints'
+import type { RpcRequest, RpcResponse } from './rpc'
 
-let db: Database | null = null
-let vfs: PingResult['vfs'] = 'memory'
+interface RawDb {
+  exec(arg: unknown): unknown
+  selectValue(sql: string, bind?: unknown[]): unknown
+  selectObject(sql: string, bind?: unknown[]): Record<string, unknown> | undefined
+  selectObjects(sql: string, bind?: unknown[]): Record<string, unknown>[]
+  close(): void
+}
+
+interface SAHPoolUtil {
+  OpfsSAHPoolDb: new (name: string) => RawDb
+  importDb(name: string, bytes: Uint8Array): number
+}
+
+let db: (Database & { close(): void }) | null = null
+let poolUtil: SAHPoolUtil | null = null
+let vfs: 'opfs-sahpool' | 'memory' = 'memory'
 
 async function boot(): Promise<void> {
   const sqlite3 = await sqlite3InitModule()
   try {
-    const poolUtil = await sqlite3.installOpfsSAHPoolVfs({})
-    db = new poolUtil.OpfsSAHPoolDb('/collection.db') as unknown as Database
+    poolUtil = (await sqlite3.installOpfsSAHPoolVfs({})) as unknown as SAHPoolUtil
+    db = wrapDb(new poolUtil.OpfsSAHPoolDb('/collection.db'))
     vfs = 'opfs-sahpool'
   } catch {
-    db = new sqlite3.oo1.DB(':memory:') as unknown as Database
+    db = wrapDb(new sqlite3.oo1.DB(':memory:') as never)
     vfs = 'memory'
   }
-  initSchema(db, schemaSql)
+  initSchema(db!, schemaSql)
 }
 
 const ready = boot()
 
-type Handler = (payload: never) => unknown
-
-const routes: Record<string, Handler | null> = {
-  ping: () => ({
-    status: 'ok',
-    vfs,
-    schemaVersion: db!.selectValue('SELECT version FROM schema_version'),
-  }),
-  // Phase 1
-  session: () => ({
-    csrfToken: '', // no server, no cookies, nothing for CSRF to defend
-    database: vfs === 'opfs-sahpool' ? 'opfs:/collection.db' : ':memory: (nothing persists)',
-    undoable: latestUndoable(db!),
-  }),
-  history: () => recent(db!, 50),
-  undo: () => {
-    try {
-      return transaction(db!, () => undoOperation(db!))
-    } catch (error) {
-      if (error instanceof UndoLookupError) {
-        throw new ApiFailure(error.message, 'nothing-to-undo', 409)
-      }
-      throw error
-    }
-  },
-  // Phase 2
-  collection: null,
-  insights: null,
-  sealed: null,
-  sealedInsights: null,
-  bulkActions: null,
-  // Phase 3
-  imports: null,
-  upload: null,
-  importDetail: null,
-  resolveRow: null,
-  commitImport: null,
-  discardImport: null,
-  // Phase 4
-  bulkPreview: null,
-  bulkApply: null,
-  salesQueue: null,
-  sales: null,
-  salesSummary: null,
-  listForSale: null,
-  recordSale: null,
-  cancelSale: null,
-  // Phase 5
-  exportManifest: null,
-  buylistSummary: null,
-  download: null,
+async function importDatabase(bytes: Uint8Array): Promise<{ holdings: number; sealed: number }> {
+  if (!poolUtil) {
+    throw new ApiFailure(
+      'Importing a database needs OPFS storage, which this browser context lacks.',
+      'no-opfs',
+      400,
+    )
+  }
+  db!.close()
+  try {
+    poolUtil.importDb('/collection.db', bytes)
+  } finally {
+    db = wrapDb(new poolUtil.OpfsSAHPoolDb('/collection.db'))
+  }
+  // The imported file may predate the late columns; init_db semantics apply.
+  initSchema(db, schemaSql)
+  return {
+    holdings: Number(db.selectValue('SELECT COUNT(*) FROM holdings')),
+    sealed: Number(db.selectValue('SELECT COUNT(*) FROM sealed')),
+  }
 }
+
+const routes: Record<string, ((payload: never) => unknown) | undefined> = makeRoutes({
+  db: () => db!,
+  vfs: () => vfs,
+  schemaVersion: () => Number(db!.selectValue('SELECT version FROM schema_version')),
+  importDatabase,
+})
 
 self.onmessage = async (event: MessageEvent<RpcRequest>) => {
   const { id, route, payload } = event.data
