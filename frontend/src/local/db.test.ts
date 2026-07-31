@@ -60,8 +60,10 @@ describe('transaction()', () => {
   function fakeDb() {
     const statements: string[] = []
     const db: Database = {
-      exec: (sql: string) => statements.push(sql),
+      exec: (sql) => statements.push(typeof sql === 'string' ? sql : sql.sql),
       selectValue: () => undefined,
+      selectObject: () => undefined,
+      selectObjects: () => [],
     }
     return { db, statements }
   }

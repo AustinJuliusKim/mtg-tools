@@ -15,7 +15,14 @@
 
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm'
 import schemaSql from '../../../webapp/schema.sql?raw'
-import { initSchema, type Database } from './db'
+import { initSchema, transaction, type Database } from './db'
+import { ApiFailure } from './errors'
+import {
+  UndoLookupError,
+  latestUndoable,
+  recent,
+  undoOperation,
+} from './operations'
 import type { PingResult, RpcRequest, RpcResponse } from './rpc'
 
 let db: Database | null = null
@@ -45,9 +52,22 @@ const routes: Record<string, Handler | null> = {
     schemaVersion: db!.selectValue('SELECT version FROM schema_version'),
   }),
   // Phase 1
-  session: null,
-  history: null,
-  undo: null,
+  session: () => ({
+    csrfToken: '', // no server, no cookies, nothing for CSRF to defend
+    database: vfs === 'opfs-sahpool' ? 'opfs:/collection.db' : ':memory: (nothing persists)',
+    undoable: latestUndoable(db!),
+  }),
+  history: () => recent(db!, 50),
+  undo: () => {
+    try {
+      return transaction(db!, () => undoOperation(db!))
+    } catch (error) {
+      if (error instanceof UndoLookupError) {
+        throw new ApiFailure(error.message, 'nothing-to-undo', 409)
+      }
+      throw error
+    }
+  },
   // Phase 2
   collection: null,
   insights: null,
@@ -98,8 +118,8 @@ self.onmessage = async (event: MessageEvent<RpcRequest>) => {
       id,
       ok: false,
       error: error instanceof Error ? error.message : String(error),
-      code: 'error',
-      status: 500,
+      code: error instanceof ApiFailure ? error.code : 'error',
+      status: error instanceof ApiFailure ? error.status : 500,
     }
   }
   self.postMessage(response)
