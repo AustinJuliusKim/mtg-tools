@@ -1,0 +1,9 @@
+{
+  "name": "mtg-tools-csv-bench",
+  "private": true,
+  "type": "module",
+  "description": "Benchmark-only deps; deliberately not in frontend/package.json",
+  "dependencies": {
+    "papaparse": "^5.4.1"
+  }
+}

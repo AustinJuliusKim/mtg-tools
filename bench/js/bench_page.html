@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>csv bench page</title>
+    <script src="./node_modules/papaparse/papaparse.min.js"></script>
+  </head>
+  <body>
+    <p>Benchmark page — driven by bench_browser.mjs via Playwright.</p>
+    <script type="module">
+      import {
+        mergeRows, oracleOf, parseRows, parseSealed, sealedOracle, summarize,
+      } from './parse.mjs'
+
+      function median(xs) {
+        const s = [...xs].sort((a, b) => a - b)
+        const mid = Math.floor(s.length / 2)
+        return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2
+      }
+
+      // Same protocol as the other lanes. Text is handed in already-loaded:
+      // the browser "read" cost is the fetch below, reported separately, since
+      // a PWA reads a dropped File from memory rather than from disk.
+      window.runBench = async (urls, lane, runs) => {
+        const warmup = 2
+        let t = performance.now()
+        const texts = []
+        for (const url of urls) texts.push(await (await fetch(url)).text())
+        const fetchMs = performance.now() - t
+
+        const samples = []
+        let oracle = null
+        let cold = null
+        for (let i = 0; i < warmup + runs; i++) {
+          const stages = {}
+          if (lane === 'sealed') {
+            t = performance.now()
+            const rows = texts.flatMap((text) => parseSealed(text, window.Papa))
+            stages.parse = performance.now() - t
+            oracle = { pre: sealedOracle(rows), post: sealedOracle(rows) }
+          } else {
+            t = performance.now()
+            const rows = texts.flatMap((text) => parseRows(text, window.Papa))
+            stages.parse = performance.now() - t
+            t = performance.now()
+            const merged = mergeRows(rows)
+            stages.merge = performance.now() - t
+            t = performance.now()
+            summarize(merged)
+            stages.summarize = performance.now() - t
+            oracle = { pre: oracleOf(rows), post: oracleOf(merged) }
+          }
+          if (i === 0) cold = { ...stages }
+          if (i >= warmup) samples.push(stages)
+        }
+        const medians = Object.fromEntries(
+          Object.keys(samples[0]).map((k) => [
+            k, Number(median(samples.map((s) => s[k])).toFixed(2)),
+          ]),
+        )
+        return {
+          fetchMs: Number(fetchMs.toFixed(2)),
+          stagesMedianMs: medians,
+          totalMedianMs: Number(
+            Object.values(medians).reduce((a, b) => a + b, 0).toFixed(2),
+          ),
+          coldFirstRunMs: cold,
+          runs,
+          oracle,
+        }
+      }
+      window.benchReady = true
+    </script>
+  </body>
+</html>
