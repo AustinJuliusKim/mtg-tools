@@ -11,6 +11,7 @@ import '@mantine/charts/styles.css'
 import 'mantine-datatable/styles.css'
 
 import { App } from './App'
+import { LocalGuard } from './local/LocalGuard'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -18,7 +19,9 @@ createRoot(document.getElementById('root')!).render(
     <MantineProvider defaultColorScheme="auto">
       <Notifications position="bottom-right" />
       <BrowserRouter>
-        <App />
+        <LocalGuard>
+          <App />
+        </LocalGuard>
       </BrowserRouter>
     </MantineProvider>
   </StrictMode>,

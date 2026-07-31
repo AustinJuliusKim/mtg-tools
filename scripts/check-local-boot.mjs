@@ -45,7 +45,8 @@ for (;;) {
 
 const browser = await chromium.launch()
 try {
-  const page = await browser.newPage()
+  const context = await browser.newContext()
+  const page = await context.newPage()
   await page.goto('http://127.0.0.1:4199/')
   const boot = await page.evaluate(() => window.__localBoot)
   if (boot?.status !== 'ok') throw new Error(`ping failed: ${JSON.stringify(boot)}`)
@@ -76,6 +77,16 @@ try {
     throw new Error(`undo on empty log should 409: ${JSON.stringify(undoRefusal)}`)
   }
   console.log(`phase 1 endpoints ok: session/history answer, empty undo refuses with 409 ("${undoRefusal.message}")`)
+
+  // Phase 6: the first-run offer on an empty database, and the one-tab rule.
+  await page.waitForSelector('text=Your collection lives in this browser now', { timeout: 5000 })
+  console.log('phase 6: first-run panel visible on an empty database ✓')
+
+  const second = await context.newPage()
+  await second.goto('http://127.0.0.1:4199/')
+  await second.waitForSelector('text=open in another tab', { timeout: 5000 })
+  console.log('phase 6: second tab is blocked with the explanation screen ✓')
+  await second.close()
 } finally {
   await browser.close()
   preview.kill()

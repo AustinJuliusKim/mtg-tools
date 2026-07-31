@@ -13,6 +13,10 @@ const useLocal = import.meta.env.VITE_BACKEND === 'local'
 
 export async function saveDownload(name: DownloadName, opts?: DownloadOptions): Promise<void> {
   const { filename, blob } = await api.download(name, opts)
+  if (name === 'bundle') {
+    // The backup nudge keys off this — the bundle is the durable copy.
+    localStorage.setItem('mtg-tools-last-bundle-export', new Date().toISOString())
+  }
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url
