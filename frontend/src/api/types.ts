@@ -304,8 +304,29 @@ export class ApiError extends Error {
   }
 }
 
+export type DownloadName =
+  | 'bundle'
+  | 'ledger'
+  | 'buylist'
+  | 'buylist-ck'
+  | 'sealed-template'
+  | 'table'
+
+export interface DownloadOptions {
+  table?: string
+  minPrice?: string
+}
+
+export interface DownloadResult {
+  filename: string
+  blob: Blob
+}
+
 /** Everything a backend must provide. Both transports implement exactly this. */
 export interface Api {
+  /** A file download: http fetches the route, local builds the bytes in the
+   * worker. Either way the caller gets a Blob and its filename. */
+  download(name: DownloadName, opts?: DownloadOptions): Promise<DownloadResult>
   session(): Promise<SessionInfo>
   collection(filters: Filters, opts?: Filters): Promise<CollectionPage>
   insights(filters: Filters): Promise<Insights>

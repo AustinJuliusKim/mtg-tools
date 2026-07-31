@@ -23,6 +23,7 @@ import {
   type SaleRecord,
   type SalesSummary,
 } from '../api/client'
+import { downloadProps } from '../api/download'
 import { useResource } from '../components/useResource'
 import {
   Refetching,
@@ -428,14 +429,12 @@ function BuylistPanel({ revision }: { revision: number }) {
         ) : (
           <Group gap="xs" wrap="nowrap">
             <Button
-              component="a"
-              href="/api/export/buylist/ck"
-              download
               variant="filled"
+              {...downloadProps('buylist-ck', '/api/export/buylist/ck')}
             >
               Card Kingdom CSV
             </Button>
-            <Button component="a" href="/api/export/buylist" download variant="default">
+            <Button variant="default" {...downloadProps('buylist', '/api/export/buylist')}>
               Detailed CSV
             </Button>
           </Group>
@@ -478,15 +477,10 @@ export function ExportPanel() {
         itself.
       </Text>
       <Group>
-        <Button component="a" href="/api/export/bundle" download>
+        <Button {...downloadProps('bundle', '/api/export/bundle')}>
           Download bundle (.zip)
         </Button>
-        <Button
-          component="a"
-          href="/api/export/ledger"
-          download
-          variant="default"
-        >
+        <Button variant="default" {...downloadProps('ledger', '/api/export/ledger')}>
           Ledger CSV
         </Button>
         {manifest && (

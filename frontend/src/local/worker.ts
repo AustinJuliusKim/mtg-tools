@@ -34,19 +34,23 @@ interface SAHPoolUtil {
 }
 
 let db: (Database & { close(): void }) | null = null
+let rawDb: RawDb | null = null
+let sqlite3Api: { capi: { sqlite3_js_db_export(db: unknown): Uint8Array } } | null = null
 let poolUtil: SAHPoolUtil | null = null
 let vfs: 'opfs-sahpool' | 'memory' = 'memory'
 
 async function boot(): Promise<void> {
   const sqlite3 = await sqlite3InitModule()
+  sqlite3Api = sqlite3 as never
   try {
     poolUtil = (await sqlite3.installOpfsSAHPoolVfs({})) as unknown as SAHPoolUtil
-    db = wrapDb(new poolUtil.OpfsSAHPoolDb('/collection.db'))
+    rawDb = new poolUtil.OpfsSAHPoolDb('/collection.db')
     vfs = 'opfs-sahpool'
   } catch {
-    db = wrapDb(new sqlite3.oo1.DB(':memory:') as never)
+    rawDb = new sqlite3.oo1.DB(':memory:') as never
     vfs = 'memory'
   }
+  db = wrapDb(rawDb!)
   initSchema(db!, schemaSql)
 }
 
@@ -64,7 +68,8 @@ async function importDatabase(bytes: Uint8Array): Promise<{ holdings: number; se
   try {
     poolUtil.importDb('/collection.db', bytes)
   } finally {
-    db = wrapDb(new poolUtil.OpfsSAHPoolDb('/collection.db'))
+    rawDb = new poolUtil.OpfsSAHPoolDb('/collection.db')
+    db = wrapDb(rawDb)
   }
   // The imported file may predate the late columns; init_db semantics apply.
   initSchema(db, schemaSql)
@@ -79,6 +84,15 @@ const routes: Record<string, ((payload: never) => unknown) | undefined> = makeRo
   vfs: () => vfs,
   schemaVersion: () => Number(db!.selectValue('SELECT version FROM schema_version')),
   importDatabase,
+  // The real database image, via the same serialization sqlite3 itself uses —
+  // the bundle's collection.sqlite opens in any stock sqlite3.
+  exportDb: () => {
+    try {
+      return sqlite3Api!.capi.sqlite3_js_db_export(rawDb)
+    } catch {
+      return null
+    }
+  },
 })
 
 self.onmessage = async (event: MessageEvent<RpcRequest>) => {

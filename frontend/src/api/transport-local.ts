@@ -56,6 +56,17 @@ export const importLocalDatabase = (file: File) =>
   rpc<{ imported: boolean; holdings: number; sealed: number }>('importDatabase', { file })
 
 export const localApi: Api = {
+  download: async (name, opts) => {
+    const result = await rpc<{ filename: string; mime: string; bytes: Uint8Array }>('download', {
+      name,
+      table: opts?.table,
+      minPrice: opts?.minPrice,
+    })
+    return {
+      filename: result.filename,
+      blob: new Blob([result.bytes as BlobPart], { type: result.mime }),
+    }
+  },
   session: () => rpc('session'),
   collection: (filters, opts = {}) => rpc('collection', { filters, opts }),
   insights: (filters) => rpc('insights', { filters }),

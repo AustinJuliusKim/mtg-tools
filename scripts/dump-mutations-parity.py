@@ -24,6 +24,19 @@ import webapp.operations, webapp.importer, webapp.bulk, webapp.sales  # noqa: E4
 for module in (webapp.operations, webapp.importer, webapp.bulk, webapp.sales):
     module.now = lambda: FROZEN
 
+# The exporter reads the wall clock directly (manifest exportedAt, zip stamp).
+from datetime import datetime as _real_datetime  # noqa: E402
+import webapp.exporter  # noqa: E402
+
+
+class _FrozenDatetime:
+    @staticmethod
+    def now(tz=None):
+        return _real_datetime.fromisoformat(FROZEN)
+
+
+webapp.exporter.datetime = _FrozenDatetime
+
 from webapp.app import create_app  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -95,7 +108,34 @@ def main() -> int:
     for name, path in dumps.items():
         with open(os.path.join(out_dir, f"{name}.json"), "w", encoding="utf-8") as handle:
             json.dump(client.get(path).get_json(), handle)
-    print(f"dumped {len(dumps)} endpoints to {out_dir}")
+
+    # Phase-5 exports: every download, byte for byte.
+    exports = {
+        "manifest.json.txt": "/api/export/manifest",
+        "ledger.csv": "/api/export/ledger",
+        "buylist.csv": "/api/export/buylist",
+        "buylist-ck.csv": "/api/export/buylist/ck",
+        "template.csv": "/api/sealed/template",
+    }
+    for table in ("holdings", "sealed", "verdicts", "sales", "price_history", "imports", "operations"):
+        exports[f"table-{table}.csv"] = f"/api/export/table/{table}"
+    for fname, path in exports.items():
+        with open(os.path.join(out_dir, fname), "wb") as handle:
+            handle.write(client.get(path).data)
+
+    import zipfile as _zipfile
+
+    bundle_dir = os.path.join(out_dir, "bundle")
+    os.makedirs(bundle_dir, exist_ok=True)
+    bundle = client.get("/api/export/bundle")
+    archive = _zipfile.ZipFile(io.BytesIO(bundle.data))
+    with open(os.path.join(bundle_dir, "_names.json"), "w", encoding="utf-8") as handle:
+        json.dump(sorted(archive.namelist()), handle)
+    for entry in archive.namelist():
+        with open(os.path.join(bundle_dir, entry.replace("/", "__")), "wb") as handle:
+            handle.write(archive.read(entry))
+
+    print(f"dumped {len(dumps)} endpoints + {len(exports)} exports + bundle to {out_dir}")
     return 0
 
 

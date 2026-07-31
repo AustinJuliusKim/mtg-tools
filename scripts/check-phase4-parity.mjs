@@ -82,6 +82,25 @@ try {
 
       await api.undo()
 
+      const download = async (name, opts) => {
+        const { filename, blob } = await api.download(name, opts)
+        const bytes = new Uint8Array(await blob.arrayBuffer())
+        let binary = ''
+        for (const b of bytes) binary += String.fromCharCode(b)
+        return { filename, b64: btoa(binary) }
+      }
+      const downloads = {
+        'manifest.json.txt': { json: await api.exportManifest() },
+        'ledger.csv': await download('ledger'),
+        'buylist.csv': await download('buylist'),
+        'buylist-ck.csv': await download('buylist-ck'),
+        'template.csv': await download('sealed-template'),
+        bundle: await download('bundle'),
+      }
+      for (const table of ['holdings', 'sealed', 'verdicts', 'sales', 'price_history', 'imports', 'operations']) {
+        downloads[`table-${table}.csv`] = await download('table', { table })
+      }
+
       return {
         collection: await api.collection({}),
         sealed: await api.sealed({}),
@@ -90,19 +109,57 @@ try {
         sales: await api.sales(),
         'sales-summary': await api.salesSummary(),
         history: await api.history(),
+        downloads,
       }
     },
     [FROZEN, fixture('sample.csv'), fixture('sample2.csv'), fixture('sealed_sample.csv')],
   )
 
-  for (const name of Object.keys(results)) {
+  const { downloads, ...endpoints } = results
+  for (const name of Object.keys(endpoints)) {
     const expected = JSON.parse(readFileSync(join(EXPECTED_DIR, `${name}.json`), 'utf-8'))
-    deepStrictEqual(results[name], expected, `${name} diverges from Flask`)
+    deepStrictEqual(endpoints[name], expected, `${name} diverges from Flask`)
     console.log(`${name}: deep-equal with Flask ✓`)
   }
+
+  // Phase-5 exports: bytes must match Flask's, file by file.
+  deepStrictEqual(
+    downloads['manifest.json.txt'].json,
+    JSON.parse(readFileSync(join(EXPECTED_DIR, 'manifest.json.txt'), 'utf-8')),
+    'manifest diverges',
+  )
+  console.log('manifest: deep-equal with Flask ✓')
+  for (const name of Object.keys(downloads)) {
+    if (name === 'manifest.json.txt' || name === 'bundle') continue
+    const actual = Buffer.from(downloads[name].b64, 'base64')
+    const expected = readFileSync(join(EXPECTED_DIR, name))
+    deepStrictEqual(actual, expected, `${name} bytes diverge from Flask`)
+  }
+  console.log('11 CSV exports: byte-identical with Flask ✓')
+
+  // The bundle: same entry names; CSV entries byte-identical; the sqlite image
+  // compared by header (page layout legitimately differs between builds).
+  const { unzipSync } = await import(
+    join(REPO, 'frontend', 'node_modules', 'fflate', 'esm', 'browser.js')
+  )
+  const entries = unzipSync(Buffer.from(downloads.bundle.b64, 'base64'))
+  const expectedNames = JSON.parse(readFileSync(join(EXPECTED_DIR, 'bundle', '_names.json'), 'utf-8'))
+  // Flask's parity run sits on :memory:, so its bundle legitimately lacks the
+  // database image; the local backend always has one. Compare the rest.
+  const dropSqlite = (names) => names.filter((n) => n !== 'collection.sqlite')
+  deepStrictEqual(dropSqlite(Object.keys(entries)).sort(), dropSqlite(expectedNames), 'bundle entry names diverge')
+  if (entries['collection.sqlite']) {
+    const header = Buffer.from(entries['collection.sqlite'].slice(0, 15)).toString('latin1')
+    if (header !== 'SQLite format 3') throw new Error('bundle sqlite image is not a database')
+  }
+  for (const entry of dropSqlite(Object.keys(entries))) {
+    const expectedBytes = readFileSync(join(EXPECTED_DIR, 'bundle', entry.replaceAll('/', '__')))
+    deepStrictEqual(Buffer.from(entries[entry]), expectedBytes, `bundle ${entry} diverges`)
+  }
+  console.log(`bundle: ${Object.keys(entries).length} entries match Flask ✓ (sqlite image header-checked)`)
   console.log(
-    `scenario parity complete — history has ${results.history.length} operations, ` +
-      `net ${results['sales-summary'].net}`,
+    `scenario parity complete — history has ${endpoints.history.length} operations, ` +
+      `net ${endpoints['sales-summary'].net}`,
   )
 } finally {
   await browser.close()
