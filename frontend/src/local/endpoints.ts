@@ -7,8 +7,18 @@
  * synchronous (oo1 over SAHPool is sync); only the RPC edge is async.
  */
 
-import { formatCents, transaction, type Database } from './db'
+import { ACTIONS, BulkError, applyAction, preview, resolveSelection } from './bulk'
+import { formatCents, setClock, toCents, transaction, type Database } from './db'
 import { ApiFailure } from './errors'
+import {
+  SaleError,
+  cancel,
+  listForSale,
+  recordListing,
+  recordSale,
+  saleRows,
+  summary as salesSummary,
+} from './sales'
 import {
   BLOCKING,
   DetectionError,
@@ -170,22 +180,43 @@ function sealedTotalsJson(t: repo.SealedTotals) {
   }
 }
 
-//: bulk.py's ACTIONS metadata (the run functions arrive in phase 4).
-const BULK_ACTIONS: Array<{
-  key: string
-  label: string
-  needsValue: boolean
-  destructive: boolean
-  kinds: string[]
-}> = [
-  { key: 'verdict', label: 'Set verdict', needsValue: true, destructive: false, kinds: ['holding', 'sealed'] },
-  { key: 'condition', label: 'Set condition', needsValue: true, destructive: false, kinds: ['holding', 'sealed'] },
-  { key: 'language', label: 'Set language', needsValue: true, destructive: false, kinds: ['holding'] },
-  { key: 'price', label: 'Set price', needsValue: true, destructive: false, kinds: ['holding', 'sealed'] },
-  { key: 'adjust_price', label: 'Adjust price by %', needsValue: true, destructive: false, kinds: ['holding', 'sealed'] },
-  { key: 'cost_basis', label: 'Set cost basis', needsValue: true, destructive: false, kinds: ['sealed'] },
-  { key: 'delete', label: 'Delete', needsValue: false, destructive: true, kinds: ['holding', 'sealed'] },
-]
+/**
+ * Body filters for a bulk selection — api.py's `_selection_filters`. POST
+ * bodies arrive as raw JSON (booleans and numbers, unlike query strings), so
+ * values pass through untouched; only None/''/[] are dropped, and unknown
+ * keys are the same strict 400.
+ */
+function selectionFilters(kind: string, source: Record<string, unknown>): repo.FilterValues {
+  const spec = kind === 'sealed' ? repo.SEALED_FILTERS : repo.FILTERS
+  const unknown = Object.keys(source).filter((key) => !(key in spec) && !NON_FILTER_PARAMS.has(key))
+  if (unknown.length) {
+    const known = Object.keys(spec).sort().join(', ')
+    throw new ApiFailure(
+      `Unknown filter(s): ${unknown.sort().join(', ')}. Available: ${known}`,
+      'bad-filter',
+      400,
+    )
+  }
+  const out: repo.FilterValues = {}
+  for (const key of Object.keys(spec)) {
+    const value = source[key]
+    if (value !== null && value !== undefined && value !== '' && !(Array.isArray(value) && !value.length)) {
+      out[key] = value
+    }
+  }
+  return out
+}
+
+/** api.py's `_cents_or_none`: dollars in, cents out, nonsense rejected. */
+function centsOrNone(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  try {
+    return toCents(String(value))
+  } catch {
+    const shown = typeof value === 'string' ? `'${value}'` : String(value)
+    throw new ApiFailure(`${shown} is not an amount.`, 'bad-amount', 400)
+  }
+}
 
 // --- the routes --------------------------------------------------------------
 
@@ -325,9 +356,148 @@ export function makeRoutes(ctx: WorkerContext) {
       if (!(kind in repo.SUBJECTS)) {
         throw new ApiFailure(`'${kind}' is not a bulk subject`, 'bad-kind', 400)
       }
-      return BULK_ACTIONS.filter((a) => a.kinds.includes(kind)).map(
-        ({ key, label, needsValue, destructive }) => ({ key, label, needsValue, destructive }),
-      )
+      return Object.entries(ACTIONS)
+        .filter(([, spec]) => spec.kinds.includes(kind))
+        .map(([key, spec]) => ({
+          key,
+          label: spec.label,
+          needsValue: spec.needsValue,
+          destructive: Boolean(spec.destructive),
+        }))
+    },
+
+    bulkPreview: (payload: Record<string, unknown>) => {
+      const kind = (payload?.kind as string) ?? 'holding'
+      const db = ctx.db()
+      let target: number[]
+      try {
+        target = resolveSelection(db, {
+          ids: payload?.ids as number[] | undefined,
+          filters: selectionFilters(kind, (payload?.filters as Record<string, unknown>) ?? {}),
+          selectAll: Boolean(payload?.selectAll),
+          kind,
+        })
+      } catch (error) {
+        if (error instanceof ApiFailure) throw error
+        throw new ApiFailure((error as Error).message, 'bad-selection', 400)
+      }
+      const p = preview(db, target, kind)
+      return {
+        count: p.count,
+        quantity: p.quantity,
+        valueCents: p.value_cents,
+        value: formatCents(p.value_cents),
+        more: p.more,
+        sample: p.sample.map((r) => ({
+          title: r.title,
+          edition: r.edition,
+          quantity: r.quantity,
+          price: formatCents(r.price_cents as number | null),
+        })),
+      }
+    },
+
+    bulkApply: (payload: Record<string, unknown>) => {
+      const kind = (payload?.kind as string) ?? 'holding'
+      const db = ctx.db()
+      try {
+        // Resolved here, from ids or filters — never from a count the client
+        // sent. This is the guarantee a stale filter cannot widen an edit.
+        const target = resolveSelection(db, {
+          ids: payload?.ids as number[] | undefined,
+          filters: selectionFilters(kind, (payload?.filters as Record<string, unknown>) ?? {}),
+          selectAll: Boolean(payload?.selectAll),
+          kind,
+        })
+        return transaction(db, () =>
+          applyAction(db, (payload?.action as string) ?? '', target, payload?.value, kind),
+        )
+      } catch (error) {
+        if (error instanceof ApiFailure) throw error
+        if (error instanceof BulkError) {
+          throw new ApiFailure(error.message, 'bulk-failed', 400)
+        }
+        throw error
+      }
+    },
+
+    salesQueue: () => listForSale(ctx.db()),
+
+    sales: (payload: { status?: string }) => {
+      try {
+        return saleRows(ctx.db(), payload?.status)
+      } catch (error) {
+        if (error instanceof SaleError) throw new ApiFailure(error.message, 'bad-status', 400)
+        throw error
+      }
+    },
+
+    salesSummary: () => {
+      const body = salesSummary(ctx.db())
+      return {
+        ...body,
+        gross: formatCents(body.grossCents),
+        costs: formatCents(body.costsCents),
+        net: formatCents(body.netCents),
+        realizedGain: formatCents(body.realizedGainCents),
+        listed: formatCents(body.listedCents),
+      }
+    },
+
+    listForSale: (payload: Record<string, unknown>) => {
+      const db = ctx.db()
+      try {
+        const saleId = transaction(db, () =>
+          recordListing(db, (payload?.kind as string) ?? '', Math.trunc(Number(payload?.id ?? 0)), {
+            channel: (payload?.channel as string) ?? '',
+            listedCents: centsOrNone(payload?.listed),
+            quantity: payload?.quantity as number | null | undefined,
+            notes: (payload?.notes as string) ?? '',
+          }),
+        )
+        return { saleId }
+      } catch (error) {
+        if (error instanceof ApiFailure) throw error
+        if (error instanceof SaleError) throw new ApiFailure(error.message, 'bad-listing', 400)
+        throw error
+      }
+    },
+
+    recordSale: (payload: Record<string, unknown>) => {
+      const db = ctx.db()
+      const sold = centsOrNone(payload?.sold)
+      if (sold === null) throw new ApiFailure('Enter what it sold for.', 'no-price', 400)
+      try {
+        const result = transaction(db, () =>
+          recordSale(db, Math.trunc(Number(payload?.saleId)), {
+            soldCents: sold,
+            feesCents: centsOrNone(payload?.fees) ?? 0,
+            shippingCents: centsOrNone(payload?.shipping) ?? 0,
+            soldAt: payload?.soldAt as string | undefined,
+            notes: payload?.notes as string | undefined,
+          }),
+        )
+        return {
+          ...result,
+          net: formatCents(result.netCents),
+          realizedGain: formatCents(result.realizedGainCents),
+        }
+      } catch (error) {
+        if (error instanceof ApiFailure) throw error
+        if (error instanceof SaleError) throw new ApiFailure(error.message, 'bad-sale', 400)
+        throw error
+      }
+    },
+
+    cancelSale: (payload: { saleId: number }) => {
+      const db = ctx.db()
+      try {
+        transaction(db, () => cancel(db, Math.trunc(Number(payload?.saleId))))
+        return { cancelled: payload.saleId }
+      } catch (error) {
+        if (error instanceof SaleError) throw new ApiFailure(error.message, 'bad-cancel', 400)
+        throw error
+      }
     },
 
     importDatabase: async (payload: { file: File }) => {
@@ -441,6 +611,13 @@ export function makeRoutes(ctx: WorkerContext) {
       const db = ctx.db()
       transaction(db, () => discardImport(db, payload.id))
       return { discarded: payload.id }
+    },
+
+    /** Debug/parity only: freeze the worker clock so timestamps deep-equal
+     * a Flask run with the same frozen clock. */
+    debugSetClock: (payload: { iso?: string }) => {
+      setClock(payload?.iso ? () => new Date(payload.iso!) : undefined)
+      return { clock: payload?.iso ?? 'live' }
     },
 
     /** Debug/parity only: the staged rows as the importer wrote them. */
