@@ -99,6 +99,105 @@ jobs:
       - name: Run the webapp suite
         run: python -W error::ResourceWarning run_webapp_tests.py -v
 
+  # The SPA-port gates: the local backend must (a) run the whole app against
+  # real browser OPFS, and (b) stay byte-identical with Flask on a scripted
+  # scenario covering imports, mutations, undo and every export.
+  e2e-local:
+    name: e2e-local
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Node deps
+        run: npm --prefix frontend ci
+
+      - name: Resolve the Playwright version
+        id: pw
+        run: |
+          echo "version=$(node -p "require('./frontend/node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Chromium
+        run: npx --prefix frontend playwright install --with-deps chromium
+
+      - name: Build the local backend
+        run: VITE_BACKEND=local npm --prefix frontend run build
+
+      - name: Run the OPFS journey
+        working-directory: frontend
+        run: npm run test:e2e:local
+
+  parity:
+    name: parity
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          npm --prefix frontend ci
+
+      - name: Resolve the Playwright version
+        id: pw
+        run: |
+          echo "version=$(node -p "require('./frontend/node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Chromium
+        run: npx --prefix frontend playwright install --with-deps chromium
+
+      - name: Build the local backend
+        run: VITE_BACKEND=local npm --prefix frontend run build
+
+      # Boot + phase-1 endpoints + first-run + one-tab rule, in real Chromium.
+      - name: Boot smoke
+        run: node scripts/check-local-boot.mjs
+
+      # The importer: fixtures staged through webapp.importer and through the
+      # TS importer must produce deep-equal rows, then a deep-equal collection.
+      - name: Importer parity
+        run: |
+          python scripts/dump-import-parity.py /tmp/p3 \
+            tests/fixtures/sample.csv tests/fixtures/sample2.csv tests/fixtures/sealed_sample.csv
+          EXPECTED_DIR=/tmp/p3 node scripts/check-phase3-parity.mjs \
+            tests/fixtures/sample.csv tests/fixtures/sample2.csv tests/fixtures/sealed_sample.csv
+
+      # The full frozen-clock scenario: mutations, sales, undo, every export.
+      - name: Scenario parity
+        run: |
+          python scripts/dump-mutations-parity.py /tmp/p4
+          EXPECTED_DIR=/tmp/p4 node scripts/check-phase4-parity.mjs
+
   frontend:
     name: frontend
     runs-on: ubuntu-latest
