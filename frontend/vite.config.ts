@@ -8,6 +8,9 @@ export default defineConfig({
     // `npm run dev` serves the UI on 5173 and proxies the API to Flask, so the
     // browser sees one origin and the session cookie behaves as in production.
     proxy: { '/api': { target: 'http://127.0.0.1:8765', changeOrigin: true } },
+    // The local backend imports `webapp/schema.sql?raw` from the repo root —
+    // one schema, two runtimes, no copy to drift.
+    fs: { allow: ['..'] },
   },
   build: { outDir: 'dist', emptyOutDir: true },
   test: {
