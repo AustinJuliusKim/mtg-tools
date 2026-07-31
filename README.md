@@ -436,3 +436,17 @@ Profile.md`. Market Value and Valuation Date are filled in; Cost Basis and the
 sale columns are deliberately blank — the plan there is a batch-level
 good-faith reconstruction from TCGPlayer/eBay order history, which this file
 cannot guess.
+
+## The SPA and the server's retirement
+
+The web app also runs **fully client-side**: built with `VITE_BACKEND=local`,
+a Web Worker owns a real SQLite database in the browser's OPFS — same schema,
+same undo log, same money rules, proven byte-identical against Flask by the
+`parity` CI job. `docs/hosting.md` covers deploying it (Cloudflare Pages,
+static files, no special headers).
+
+Retirement policy: `webapp/`, `tests_webapp/` and the Flask e2e config stay
+in-tree and CI-green until the parity and `e2e-local` jobs have soaked through
+real use and the working collection lives in OPFS with a bundle-export habit.
+Then the server side gets removed in one PR. (The `binders` CLI and the
+standalone dashboards are permanent — they never depended on the webapp.)
