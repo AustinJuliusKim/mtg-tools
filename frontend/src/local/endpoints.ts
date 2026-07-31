@@ -9,6 +9,21 @@
 
 import { formatCents, transaction, type Database } from './db'
 import { ApiFailure } from './errors'
+import {
+  BLOCKING,
+  DetectionError,
+  DuplicateImportError,
+  ImportNotFound,
+  ImportStateError,
+  blockingCount,
+  commitImport,
+  decodeUpload,
+  discardImport,
+  importJson,
+  issuesFor,
+  sha256hex,
+  stageImport,
+} from './importer'
 import { UndoLookupError, latestUndoable, recent, undoOperation } from './operations'
 import * as repo from './repo'
 
@@ -320,5 +335,127 @@ export function makeRoutes(ctx: WorkerContext) {
       const counts = await ctx.importDatabase(bytes)
       return { imported: true, ...counts }
     },
+
+    imports: () =>
+      ctx
+        .db()
+        .selectObjects('SELECT * FROM imports ORDER BY id DESC LIMIT 50')
+        .map(importJson),
+
+    upload: async (payload: { file?: File }) => {
+      const file = payload?.file
+      if (!file || !file.name) throw new ApiFailure('Choose a CSV first.', 'no-file', 400)
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      const digest = await sha256hex(bytes)
+      const text = decodeUpload(bytes)
+      const db = ctx.db()
+      try {
+        const [importId, kind] = transaction(db, () =>
+          stageImport(db, file.name, text, digest),
+        )
+        return { importId, kind }
+      } catch (error) {
+        if (error instanceof DetectionError) {
+          throw new ApiFailure(error.message, 'unrecognized', 400)
+        }
+        if (error instanceof DuplicateImportError) {
+          throw new ApiFailure(error.message, 'duplicate', 409)
+        }
+        throw error
+      }
+    },
+
+    importDetail: (payload: { id: number }) => {
+      const db = ctx.db()
+      const record = db.selectObject('SELECT * FROM imports WHERE id = ?', [payload.id])
+      if (record === undefined) {
+        throw new ApiFailure(`No import ${payload.id}.`, 'not-found', 404)
+      }
+      const grouped = issuesFor(db, payload.id)
+      return {
+        record: importJson(record),
+        blocking: blockingCount(db, payload.id),
+        blockingCodes: [...BLOCKING].sort(),
+        issues: [...grouped.entries()].map(([code, items]) => ({
+          code,
+          blocking: (BLOCKING as readonly string[]).includes(code),
+          rows: items.map((item) => ({
+            id: item.id,
+            lineNo: item.line_no,
+            name: (item.parsed.title as string) || (item.parsed.raw_name as string) || '',
+            candidates: (item.parsed.candidates as string[]) || [],
+            state: item.state,
+          })),
+        })),
+      }
+    },
+
+    resolveRow: (payload: {
+      importId: number
+      rowId: number
+      body: Record<string, unknown>
+    }) => {
+      const db = ctx.db()
+      const row = db.selectObject(
+        'SELECT * FROM staged_rows WHERE id = ? AND import_id = ?',
+        [payload.rowId, payload.importId],
+      )
+      if (row === undefined) throw new ApiFailure('No such staged row.', 'not-found', 404)
+
+      transaction(db, () => {
+        if (payload.body?.skip) {
+          db.exec({
+            sql: "UPDATE staged_rows SET state = 'skipped' WHERE id = ?",
+            bind: [payload.rowId],
+          })
+        } else {
+          const resolution = JSON.parse((row.resolution as string) || '{}')
+          for (const key of ['set_code', 'identity', 'mtgjson_uuid', 'product_name']) {
+            if (payload.body?.[key]) resolution[key] = payload.body[key]
+          }
+          db.exec({
+            sql: "UPDATE staged_rows SET resolution = ?, state = 'resolved' WHERE id = ?",
+            bind: [JSON.stringify(resolution), payload.rowId],
+          })
+        }
+      })
+      return { blocking: blockingCount(db, payload.importId) }
+    },
+
+    commitImport: (payload: { id: number }) => {
+      const db = ctx.db()
+      try {
+        return transaction(db, () => commitImport(db, payload.id))
+      } catch (error) {
+        if (error instanceof ImportNotFound) {
+          throw new ApiFailure(error.message, 'not-found', 404)
+        }
+        if (error instanceof ImportStateError) {
+          throw new ApiFailure(error.message, 'blocked', 409)
+        }
+        throw error
+      }
+    },
+
+    discardImport: (payload: { id: number }) => {
+      const db = ctx.db()
+      transaction(db, () => discardImport(db, payload.id))
+      return { discarded: payload.id }
+    },
+
+    /** Debug/parity only: the staged rows as the importer wrote them. */
+    debugStagedRows: (payload: { id: number }) =>
+      ctx
+        .db()
+        .selectObjects(
+          'SELECT line_no, parsed, issues, state FROM staged_rows WHERE import_id = ? ORDER BY line_no',
+          [payload.id],
+        )
+        .map((r) => ({
+          lineNo: r.line_no,
+          parsed: JSON.parse(r.parsed as string),
+          issues: JSON.parse(r.issues as string),
+          state: r.state,
+        })),
   }
 }

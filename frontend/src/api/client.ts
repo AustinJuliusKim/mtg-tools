@@ -7,7 +7,7 @@
  * — and the parity harness that gates retiring the server.
  */
 
-import { importLocalDatabase, localApi, pingLocal } from './transport-local'
+import { importLocalDatabase, localApi, pingLocal, rpc } from './transport-local'
 import { httpApi } from './transport-http'
 import type { Api } from './types'
 
@@ -26,8 +26,10 @@ if (useLocal && typeof window !== 'undefined') {
     __localBoot: Promise<unknown>
     __localApi: Api
     __localImportDb: typeof importLocalDatabase
+    __localRpc: typeof rpc
   }
   w.__localBoot = pingLocal()
   w.__localApi = localApi
   w.__localImportDb = importLocalDatabase
+  w.__localRpc = rpc // parity scripts reach debug-only routes through this
 }
