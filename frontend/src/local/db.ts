@@ -16,11 +16,22 @@
 
 /** Minimal surface of a sqlite-wasm oo1 DB this layer needs. */
 export interface Database {
-  exec(sql: string): unknown
+  exec(sql: string | { sql: string; bind?: unknown[] }): unknown
   selectValue(sql: string, bind?: unknown[]): unknown
+  selectObject(sql: string, bind?: unknown[]): Record<string, unknown> | undefined
+  selectObjects(sql: string, bind?: unknown[]): Record<string, unknown>[]
 }
 
 export const SCHEMA_VERSION = 1
+
+// The wall clock, injectable as one module-level switch so the parity harness
+// can freeze time across both backends without threading a parameter through
+// every ported call site.
+let clock: () => Date = () => new Date()
+
+export function setClock(fn?: () => Date): void {
+  clock = fn ?? (() => new Date())
+}
 
 /**
  * UTC ISO-8601, second precision, `+00:00` suffix — byte-identical to
@@ -28,8 +39,8 @@ export const SCHEMA_VERSION = 1
  * JS `toISOString()` says `…Z` instead; timestamps are string-sorted in SQL
  * and diffed by the parity gate, so the format is load-bearing, not cosmetic.
  */
-export function now(clock: () => Date = () => new Date()): string {
-  const d = clock()
+export function now(at: () => Date = clock): string {
+  const d = at()
   const pad = (n: number) => String(n).padStart(2, '0')
   return (
     `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` +

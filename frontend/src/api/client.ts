@@ -19,7 +19,10 @@ const useLocal = import.meta.env.VITE_BACKEND === 'local'
 export const api: Api = useLocal ? localApi : httpApi
 
 if (useLocal && typeof window !== 'undefined') {
-  // Debug/boot hook: lets a smoke script (and a curious devtools user) await
-  // the worker's first answer and see which VFS actually mounted.
-  ;(window as unknown as { __localBoot: Promise<unknown> }).__localBoot = pingLocal()
+  // Debug/boot hooks: let a smoke script (and a curious devtools user) await
+  // the worker's first answer, see which VFS mounted, and drive endpoints
+  // directly — scripts/check-local-boot.mjs asserts through these.
+  const w = window as unknown as { __localBoot: Promise<unknown>; __localApi: Api }
+  w.__localBoot = pingLocal()
+  w.__localApi = localApi
 }

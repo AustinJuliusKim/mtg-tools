@@ -54,6 +54,28 @@ try {
   if (boot.vfs !== 'opfs-sahpool') {
     console.log('note: OPFS unavailable in this context — memory fallback engaged')
   }
+
+  // Phase 1 endpoints, through the real worker in the real browser.
+  const phase1 = await page.evaluate(async () => {
+    const api = window.__localApi
+    const session = await api.session()
+    const history = await api.history()
+    let undoRefusal = null
+    try {
+      await api.undo()
+    } catch (error) {
+      undoRefusal = { message: error.message, code: error.code, status: error.status }
+    }
+    return { session, history, undoRefusal }
+  })
+  const { session, history, undoRefusal } = phase1
+  if (session.csrfToken !== '') throw new Error('local session should carry an empty CSRF token')
+  if (session.undoable !== null) throw new Error('fresh database should have nothing undoable')
+  if (!Array.isArray(history) || history.length !== 0) throw new Error('fresh history should be empty')
+  if (undoRefusal?.status !== 409 || undoRefusal.code !== 'nothing-to-undo') {
+    throw new Error(`undo on empty log should 409: ${JSON.stringify(undoRefusal)}`)
+  }
+  console.log(`phase 1 endpoints ok: session/history answer, empty undo refuses with 409 ("${undoRefusal.message}")`)
 } finally {
   await browser.close()
   preview.kill()
