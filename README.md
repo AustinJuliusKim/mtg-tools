@@ -1,5 +1,10 @@
 # mtg-tools
 
+> **This repo has moved.** Development continues at
+> [`AustinJuliusKim/projects/mtg-tools`](https://github.com/AustinJuliusKim/projects/tree/main/mtg-tools) —
+> full commit history was preserved in the move. This repo is archived and
+> kept only for its old links; open issues/PRs there instead.
+
 Python utilities for ManaBox binder CSV exports — parse, merge, filter, tier
 and export a Magic collection.
 
